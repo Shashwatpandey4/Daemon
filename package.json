@@ -1,0 +1,12 @@
+{
+  "name": "daemon",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "desktop": "pnpm --filter desktop dev",
+    "mobile": "pnpm --filter mobile start"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

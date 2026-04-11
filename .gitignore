@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Rust
+target/
+apps/desktop/src-tauri/target/
+
+# Tauri
+apps/desktop/src-tauri/gen/
+
+# Expo / React Native
+apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
+
+# Vite cache
+apps/desktop/node_modules/.vite/
+
+# OS
+.DS_Store
+
+# Env
+.env
+.env.local
+
+# pnpm
+.pnpmfile.cjs
+.pnpm-store/
+
+# npm lock (mobile uses npm internally)
+apps/mobile/package-lock.json
