@@ -1,7 +1,17 @@
-# Tauri + React + Typescript
+# Daemon — Desktop
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Tauri v2 + React 19 + TypeScript desktop app. See the [root README](../../README.md) for full project details.
 
-## Recommended IDE Setup
+## Dev
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+pnpm --filter desktop tauri dev
+```
+
+## Build
+
+```bash
+pnpm --filter desktop tauri build
+```
+
+Output: `src-tauri/target/release/bundle/` (`.deb`, `.AppImage` on Linux)
