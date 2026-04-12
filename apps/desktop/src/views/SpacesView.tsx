@@ -45,22 +45,54 @@ async function getDb() {
         created_at INTEGER NOT NULL
       )
     `);
-    await db.execute(`
-      CREATE TABLE IF NOT EXISTS space_nodes (
-        id TEXT PRIMARY KEY,
-        space_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        url TEXT,
-        file_path TEXT,
-        node_type TEXT NOT NULL DEFAULT 'link',
-        pos_x REAL NOT NULL DEFAULT 100,
-        pos_y REAL NOT NULL DEFAULT 100,
-        created_at INTEGER NOT NULL
-      )
-    `);
-    // Migrate: add new columns if this is an existing DB
-    for (const col of ["url TEXT", "file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'link'"]) {
-      try { await db.execute(`ALTER TABLE space_nodes ADD COLUMN ${col}`); } catch { /* already exists */ }
+    // Migrate space_nodes to nullable url + file_path + node_type columns.
+    // We check the schema and rebuild the table if url is still NOT NULL.
+    const tableInfo = await db.select<{ name: string; notnull: number }[]>(
+      `PRAGMA table_info(space_nodes)`
+    );
+    const urlCol = tableInfo.find(c => c.name === "url");
+    const needsMigration = !urlCol || urlCol.notnull === 1;
+
+    if (needsMigration && urlCol) {
+      // Rebuild: preserve existing rows, relax url constraint, add new cols
+      await db.execute(`ALTER TABLE space_nodes RENAME TO space_nodes_old`);
+      await db.execute(`
+        CREATE TABLE space_nodes (
+          id TEXT PRIMARY KEY,
+          space_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          url TEXT,
+          file_path TEXT,
+          node_type TEXT NOT NULL DEFAULT 'link',
+          pos_x REAL NOT NULL DEFAULT 100,
+          pos_y REAL NOT NULL DEFAULT 100,
+          created_at INTEGER NOT NULL
+        )
+      `);
+      await db.execute(`
+        INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at)
+        SELECT id, space_id, title, url, NULL, 'link', pos_x, pos_y, created_at FROM space_nodes_old
+      `);
+      await db.execute(`DROP TABLE space_nodes_old`);
+    } else if (!urlCol) {
+      // Fresh install
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS space_nodes (
+          id TEXT PRIMARY KEY,
+          space_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          url TEXT,
+          file_path TEXT,
+          node_type TEXT NOT NULL DEFAULT 'link',
+          pos_x REAL NOT NULL DEFAULT 100,
+          pos_y REAL NOT NULL DEFAULT 100,
+          created_at INTEGER NOT NULL
+        )
+      `);
+    }
+    // Add any missing columns (idempotent)
+    for (const col of ["file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'link'"]) {
+      try { await db.execute(`ALTER TABLE space_nodes ADD COLUMN ${col}`); } catch { /* exists */ }
     }
     await db.execute(`
       CREATE TABLE IF NOT EXISTS space_edges (
