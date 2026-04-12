@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Database from "@tauri-apps/plugin-sql";
-import { Plus, Trash2, Link2, Upload, ChevronRight, ChevronDown, FileText, Image, File, FileCode, Globe } from "lucide-react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Plus, Trash2, Link2, ChevronRight, ChevronDown, FileText, Image, File, FileCode, Globe, StickyNote } from "lucide-react";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import SpaceGraph from "../components/SpaceGraph";
+import AddNodeModal, { type NodeDraft } from "../components/AddNodeModal";
 
 const MIN_PANEL_WIDTH = 160;
 const MAX_PANEL_WIDTH = 400;
@@ -19,9 +19,11 @@ export interface SpaceNode {
   id: string;
   space_id: string;
   title: string;
+  content: string | null;
   url: string | null;
   file_path: string | null;
-  node_type: "link" | "file";
+  node_type: "link" | "file" | "note";
+  tags: string | null;   // JSON array string
   pos_x: number;
   pos_y: number;
   created_at: number;
@@ -62,17 +64,19 @@ async function getDb() {
           id TEXT PRIMARY KEY,
           space_id TEXT NOT NULL,
           title TEXT NOT NULL,
+          content TEXT,
           url TEXT,
           file_path TEXT,
-          node_type TEXT NOT NULL DEFAULT 'link',
+          node_type TEXT NOT NULL DEFAULT 'note',
+          tags TEXT,
           pos_x REAL NOT NULL DEFAULT 100,
           pos_y REAL NOT NULL DEFAULT 100,
           created_at INTEGER NOT NULL
         )
       `);
       await db.execute(`
-        INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at)
-        SELECT id, space_id, title, url, NULL, 'link', pos_x, pos_y, created_at FROM space_nodes_old
+        INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+        SELECT id, space_id, title, NULL, url, NULL, 'link', NULL, pos_x, pos_y, created_at FROM space_nodes_old
       `);
       await db.execute(`DROP TABLE space_nodes_old`);
     } else if (!urlCol) {
@@ -82,9 +86,11 @@ async function getDb() {
           id TEXT PRIMARY KEY,
           space_id TEXT NOT NULL,
           title TEXT NOT NULL,
+          content TEXT,
           url TEXT,
           file_path TEXT,
-          node_type TEXT NOT NULL DEFAULT 'link',
+          node_type TEXT NOT NULL DEFAULT 'note',
+          tags TEXT,
           pos_x REAL NOT NULL DEFAULT 100,
           pos_y REAL NOT NULL DEFAULT 100,
           created_at INTEGER NOT NULL
@@ -92,7 +98,7 @@ async function getDb() {
       `);
     }
     // Add any missing columns (idempotent)
-    for (const col of ["file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'link'"]) {
+    for (const col of ["content TEXT", "file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'note'", "tags TEXT"]) {
       try { await db.execute(`ALTER TABLE space_nodes ADD COLUMN ${col}`); } catch { /* exists */ }
     }
     await db.execute(`
@@ -105,11 +111,6 @@ async function getDb() {
     `);
   }
   return db;
-}
-
-function extractTitle(url: string): string {
-  try { return new URL(url).hostname.replace(/^www\./, ""); }
-  catch { return url; }
 }
 
 function nextNodePos(count: number) {
@@ -125,10 +126,7 @@ export default function SpacesView() {
   const [nodes, setNodes] = useState<SpaceNode[]>([]);
   const [edges, setEdges] = useState<SpaceEdge[]>([]);
   const [newSpaceName, setNewSpaceName] = useState("");
-  const [showAddLink, setShowAddLink] = useState(false);
-  const [linkUrl, setLinkUrl] = useState("");
-  const [linkTitle, setLinkTitle] = useState("");
-  const linkUrlRef = useRef<HTMLInputElement>(null);
+  const [showAddNode, setShowAddNode] = useState(false);
   const [panelWidth, setPanelWidth] = useState(220);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "error" | "ok" } | null>(null);
@@ -203,7 +201,8 @@ export default function SpacesView() {
   }
 
   function nodeIcon(node: SpaceNode) {
-    if (node.node_type === "link") return <Globe size={12} />;
+    if (node.node_type === "link") return <Globe size={12} color="#3b82f6" />;
+    if (node.node_type === "note") return <StickyNote size={12} color="#f59e0b" />;
     const ext = (node.file_path ?? node.title).split(".").pop()?.toLowerCase() ?? "";
     if (ext === "pdf") return <FileText size={12} color="#ef4444" />;
     if (["png","jpg","jpeg","gif","webp","svg"].includes(ext)) return <Image size={12} color="#22c55e" />;
@@ -242,65 +241,38 @@ export default function SpacesView() {
     setActiveSpace(remaining[0]?.id ?? null);
   }
 
-  function openAddLink() {
-    setLinkUrl("");
-    setLinkTitle("");
-    setShowAddLink(true);
-    setTimeout(() => linkUrlRef.current?.focus(), 50);
-  }
-
-  async function addLink() {
-    const url = linkUrl.trim();
-    if (!url || !activeSpace) return;
-    const title = linkTitle.trim() || extractTitle(url);
-    const db = await getDb();
-    const id = crypto.randomUUID();
-    const { x, y } = nextNodePos(nodes.length);
-    await db.execute(
-      "INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at) VALUES (?, ?, ?, ?, NULL, 'link', ?, ?, ?)",
-      [id, activeSpace, title, url, x, y, Date.now()]
-    );
-    setLinkUrl("");
-    setLinkTitle("");
-    setShowAddLink(false);
-    loadGraph(activeSpace);
-  }
-
-  async function addFile() {
+  async function addNode(draft: NodeDraft) {
     if (!activeSpace) return;
-
-    const selected = await openDialog({
-      multiple: true,
-      filters: [
-        { name: "Documents", extensions: ["pdf", "md", "txt", "docx", "csv"] },
-        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] },
-        { name: "All Files", extensions: ["*"] },
-      ],
-    });
-
-    if (!selected) return;
-    const files = Array.isArray(selected) ? selected : [selected];
-
+    setShowAddNode(false);
     const db = await getDb();
-    let imported = 0;
-    for (let i = 0; i < files.length; i++) {
-      const srcPath = files[i];
+    const { x, y } = nextNodePos(nodes.length);
+    const tagsJson = JSON.stringify(draft.tags);
+
+    // Determine node type
+    const isUrl = /^https?:\/\//i.test(draft.content);
+    let nodeType: "link" | "file" | "note" = "note";
+    let url: string | null = null;
+    let filePath: string | null = null;
+
+    if (draft.filePath) {
       try {
-        const destPath = await invoke<string>("import_file", { spaceId: activeSpace, src: srcPath });
-        const fileName = destPath.split("/").pop() ?? srcPath.split("/").pop() ?? "file";
-        const id = crypto.randomUUID();
-        const { x, y } = nextNodePos(nodes.length + i);
-        await db.execute(
-          "INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at) VALUES (?, ?, ?, NULL, ?, 'file', ?, ?, ?)",
-          [id, activeSpace, fileName, destPath, x, y, Date.now()]
-        );
-        imported++;
+        filePath = await invoke<string>("import_file", { spaceId: activeSpace, src: draft.filePath });
+        nodeType = "file";
       } catch (err) {
-        console.error("import failed", srcPath, err);
-        showToast(`Failed to import: ${srcPath.split("/").pop()} — ${String(err)}`, "error");
+        showToast(`Failed to import file — ${String(err)}`, "error");
+        return;
       }
+    } else if (isUrl) {
+      url = draft.content;
+      nodeType = "link";
     }
-    if (imported > 0) showToast(`Added ${imported} file${imported > 1 ? "s" : ""}`);
+
+    const id = crypto.randomUUID();
+    await db.execute(
+      `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, activeSpace, draft.title, draft.content, url, filePath, nodeType, tagsJson, x, y, Date.now()]
+    );
     loadGraph(activeSpace);
   }
 
@@ -421,16 +393,10 @@ export default function SpacesView() {
           <>
             <div className="graph-toolbar">
               <span className="graph-title">{active?.name}</span>
-              <div className="toolbar-actions">
-                <button className="btn-secondary icon-btn" onClick={addFile}>
-                  <Upload size={14} />
-                  <span>Add file</span>
-                </button>
-                <button className="btn-primary icon-btn" onClick={openAddLink}>
-                  <Plus size={14} />
-                  <span>Add link</span>
-                </button>
-              </div>
+              <button className="btn-primary icon-btn" onClick={() => setShowAddNode(true)}>
+                <Plus size={14} />
+                <span>Add Node</span>
+              </button>
             </div>
 
             <div className="graph-canvas">
@@ -444,32 +410,8 @@ export default function SpacesView() {
               />
             </div>
 
-            {/* Add link modal */}
-            {showAddLink && (
-              <div className="modal-backdrop" onClick={() => setShowAddLink(false)}>
-                <div className="modal" onClick={e => e.stopPropagation()}>
-                  <h3 className="modal-title">Add link</h3>
-                  <input
-                    ref={linkUrlRef}
-                    className="modal-input"
-                    placeholder="https://..."
-                    value={linkUrl}
-                    onChange={e => setLinkUrl(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && addLink()}
-                  />
-                  <input
-                    className="modal-input"
-                    placeholder="Title (optional)"
-                    value={linkTitle}
-                    onChange={e => setLinkTitle(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && addLink()}
-                  />
-                  <div className="modal-actions">
-                    <button className="btn-ghost" onClick={() => setShowAddLink(false)}>Cancel</button>
-                    <button className="btn-primary" onClick={addLink}>Add</button>
-                  </div>
-                </div>
-              </div>
+            {showAddNode && (
+              <AddNodeModal onAdd={addNode} onClose={() => setShowAddNode(false)} />
             )}
           </>
         )}

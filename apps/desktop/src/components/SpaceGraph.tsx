@@ -13,11 +13,10 @@ import {
   type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LinkNode, type LinkNodeData } from "./LinkNode";
-import { FileNode, type FileNodeData } from "./FileNode";
+import { NodeCard, type NodeCardData } from "./NodeCard";
 import type { SpaceNode, SpaceEdge } from "../views/SpacesView";
 
-const NODE_TYPES = { link: LinkNode, file: FileNode };
+const NODE_TYPES = { node: NodeCard };
 
 interface Props {
   nodes: SpaceNode[];
@@ -32,20 +31,18 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onNode
   const rfNodes: Node[] = useMemo(() =>
     nodes.map(n => ({
       id: n.id,
-      type: n.node_type ?? "link",
+      type: "node",
       position: { x: n.pos_x, y: n.pos_y },
-      data: n.node_type === "file"
-        ? ({
-            title: n.title,
-            file_path: n.file_path ?? "",
-            onDelete: onNodeDelete,
-          } satisfies FileNodeData)
-        : ({
-            title: n.title,
-            url: n.url ?? "",
-            onRename: onNodeRename,
-            onDelete: onNodeDelete,
-          } satisfies LinkNodeData),
+      data: {
+        title: n.title,
+        content: n.content ?? null,
+        url: n.url ?? null,
+        file_path: n.file_path ?? null,
+        node_type: n.node_type ?? "note",
+        tags: n.tags ? JSON.parse(n.tags) : [],
+        onDelete: onNodeDelete,
+        onRename: onNodeRename,
+      } satisfies NodeCardData,
     })),
     [nodes, onNodeRename, onNodeDelete]
   );
@@ -58,7 +55,6 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onNode
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(rfNodes);
   const [flowEdges, setFlowEdges, onEdgesChange] = useEdgesState(rfEdges);
 
-  // Sync external changes into flow state
   useEffect(() => { setFlowNodes(rfNodes); }, [rfNodes]);
   useEffect(() => { setFlowEdges(rfEdges); }, [rfEdges]);
 

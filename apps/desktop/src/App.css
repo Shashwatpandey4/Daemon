@@ -612,6 +612,221 @@
 .lna-btn:hover { color: var(--text-1); background: #333; }
 .lna-btn.danger:hover { color: #ef4444; }
 
+/* ── Unified Node Card ──────────────────────────────── */
+.node-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 180px;
+  max-width: 240px;
+  cursor: default;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  transition: border-color 0.15s;
+}
+
+.node-card:hover { border-color: var(--accent); }
+
+.nc-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.nc-icon { display: flex; align-items: center; flex-shrink: 0; }
+
+.nc-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+  flex: 1;
+}
+
+.nc-title-input {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--bg-3);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  outline: none;
+  width: 100%;
+  font-family: inherit;
+}
+
+.nc-subtitle {
+  font-size: 0.7rem;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 20px;
+}
+
+.nc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 20px;
+}
+
+.nc-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 20px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.nc-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  margin-top: 2px;
+}
+
+.node-card:hover .nc-actions { opacity: 1; }
+
+/* ── Add Node Modal extras ──────────────────────────── */
+.add-node-modal { gap: 10px; }
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 4px;
+  transition: color 0.12s;
+}
+
+.modal-close:hover { color: var(--text-1); }
+
+.modal-textarea {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text-1);
+  font-size: 0.875rem;
+  font-family: inherit;
+  padding: 9px 12px;
+  outline: none;
+  resize: vertical;
+  min-height: 70px;
+  transition: border-color 0.15s;
+  line-height: 1.5;
+}
+
+.modal-textarea:focus { border-color: var(--accent); }
+
+/* Tag input */
+.tag-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  min-height: 38px;
+  cursor: text;
+  transition: border-color 0.15s;
+}
+
+.tag-input-row:focus-within { border-color: var(--accent); }
+
+.tag-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 20px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.tag-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.tag-remove:hover { opacity: 1; }
+
+.tag-input {
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-1);
+  font-size: 0.82rem;
+  font-family: inherit;
+  min-width: 120px;
+  flex: 1;
+}
+
+/* File attach */
+.attach-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-family: inherit;
+  padding: 7px 12px;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.attach-btn:hover { color: var(--text-1); border-color: var(--accent); }
+
+.file-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  color: var(--text-2);
+}
+
+.file-pill-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── File node ──────────────────────────────────────── */
 .file-node {
   background: var(--bg-2);
