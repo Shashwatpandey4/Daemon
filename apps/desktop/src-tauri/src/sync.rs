@@ -105,9 +105,13 @@ pub fn advertise_and_serve(db_path: PathBuf) {
                 .route("/sync", post(sync_handler))
                 .with_state(state);
 
-            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{HTTP_PORT}"))
-                .await
-                .expect("bind port");
+            let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{HTTP_PORT}")).await {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[sync] failed to bind port {HTTP_PORT}: {e}");
+                    return;
+                }
+            };
             println!("[sync] HTTP server listening on port {HTTP_PORT}");
 
             // Advertise via mDNS

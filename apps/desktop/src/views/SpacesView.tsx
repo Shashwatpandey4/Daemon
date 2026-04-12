@@ -98,6 +98,12 @@ export default function SpacesView() {
   const linkUrlRef = useRef<HTMLInputElement>(null);
   const [panelWidth, setPanelWidth] = useState(200);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: "error" | "ok" } | null>(null);
+
+  function showToast(msg: string, type: "error" | "ok" = "ok") {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 4000);
+  }
 
   function onDividerMouseDown(e: React.MouseEvent) {
     e.preventDefault();
@@ -201,6 +207,7 @@ export default function SpacesView() {
     const files = Array.isArray(selected) ? selected : [selected];
 
     const db = await getDb();
+    let imported = 0;
     for (let i = 0; i < files.length; i++) {
       const srcPath = files[i];
       try {
@@ -212,10 +219,13 @@ export default function SpacesView() {
           "INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at) VALUES (?, ?, ?, NULL, ?, 'file', ?, ?, ?)",
           [id, activeSpace, fileName, destPath, x, y, Date.now()]
         );
+        imported++;
       } catch (err) {
         console.error("import failed", srcPath, err);
+        showToast(`Failed to import: ${srcPath.split("/").pop()} — ${String(err)}`, "error");
       }
     }
+    if (imported > 0) showToast(`Added ${imported} file${imported > 1 ? "s" : ""}`);
     loadGraph(activeSpace);
   }
 
@@ -360,6 +370,9 @@ export default function SpacesView() {
           </>
         )}
       </div>
+      {toast && (
+        <div className={`toast ${toast.type}`}>{toast.msg}</div>
+      )}
     </div>
   );
 }
