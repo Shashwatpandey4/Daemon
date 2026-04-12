@@ -3,6 +3,9 @@ import Database from "@tauri-apps/plugin-sql";
 import { Plus, Trash2, Link2 } from "lucide-react";
 import SpaceGraph from "../components/SpaceGraph";
 
+const MIN_PANEL_WIDTH = 160;
+const MAX_PANEL_WIDTH = 400;
+
 export interface Space {
   id: string;
   name: string;
@@ -76,6 +79,29 @@ export default function SpacesView() {
   const [linkUrl, setLinkUrl] = useState("");
   const [linkTitle, setLinkTitle] = useState("");
   const linkUrlRef = useRef<HTMLInputElement>(null);
+  const [panelWidth, setPanelWidth] = useState(200);
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  function onDividerMouseDown(e: React.MouseEvent) {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: panelWidth };
+
+    function onMouseMove(e: MouseEvent) {
+      if (!dragRef.current) return;
+      const delta = e.clientX - dragRef.current.startX;
+      const next = Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, dragRef.current.startWidth + delta));
+      setPanelWidth(next);
+    }
+
+    function onMouseUp() {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    }
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }
 
   async function loadSpaces() {
     const db = await getDb();
@@ -179,7 +205,7 @@ export default function SpacesView() {
   return (
     <div className="spaces-shell">
       {/* Left panel */}
-      <div className="spaces-panel">
+      <div className="spaces-panel" style={{ width: panelWidth, minWidth: panelWidth }}>
         <div className="spaces-panel-header">
           <span className="spaces-panel-title">Spaces</span>
         </div>
@@ -212,11 +238,14 @@ export default function SpacesView() {
             onChange={e => setNewSpaceName(e.target.value)}
             onKeyDown={e => e.key === "Enter" && addSpace()}
           />
-          <button className="spaces-new-btn" onClick={addSpace} title="Add space">
-            <Plus size={14} />
+          <button className="spaces-new-btn" onClick={addSpace}>
+            <Plus size={13} /> New Space
           </button>
         </div>
       </div>
+
+      {/* Resize divider */}
+      <div className="panel-divider" onMouseDown={onDividerMouseDown} />
 
       {/* Graph canvas */}
       <div className="spaces-graph">

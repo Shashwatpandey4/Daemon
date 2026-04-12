@@ -297,13 +297,26 @@
 }
 
 .spaces-panel {
-  width: 200px;
-  min-width: 200px;
   background: var(--bg-1);
-  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0;
+}
+
+.panel-divider {
+  width: 4px;
+  background: transparent;
+  border-left: 1px solid var(--border);
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.panel-divider:hover,
+.panel-divider:active {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .spaces-panel-header {
@@ -370,13 +383,14 @@
 
 .spaces-new {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 6px;
   padding: 8px;
   border-top: 1px solid var(--border);
 }
 
 .spaces-new-input {
-  flex: 1;
+  width: 100%;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -385,11 +399,13 @@
   font-family: inherit;
   padding: 5px 8px;
   outline: none;
+  min-width: 0;
 }
 
 .spaces-new-input:focus { border-color: var(--accent); }
 
 .spaces-new-btn {
+  width: 100%;
   background: var(--bg-3);
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -397,7 +413,11 @@
   cursor: pointer;
   display: flex;
   align-items: center;
-  padding: 5px 7px;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  font-size: 0.78rem;
+  font-family: inherit;
   transition: color 0.12s;
 }
 
