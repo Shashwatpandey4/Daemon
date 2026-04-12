@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Database from "@tauri-apps/plugin-sql";
-import { Plus, Trash2, Link2, Upload } from "lucide-react";
+import { Plus, Trash2, Link2, Upload, ChevronRight, ChevronDown, FileText, Image, File, FileCode, Globe } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { openUrl as tauriOpenUrl, openPath } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import SpaceGraph from "../components/SpaceGraph";
 
@@ -128,9 +129,11 @@ export default function SpacesView() {
   const [linkUrl, setLinkUrl] = useState("");
   const [linkTitle, setLinkTitle] = useState("");
   const linkUrlRef = useRef<HTMLInputElement>(null);
-  const [panelWidth, setPanelWidth] = useState(200);
+  const [panelWidth, setPanelWidth] = useState(220);
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "error" | "ok" } | null>(null);
+  const [expandedSpaces, setExpandedSpaces] = useState<Set<string>>(new Set());
+  const [allSpaceNodes, setAllSpaceNodes] = useState<Record<string, SpaceNode[]>>({});
 
   function showToast(msg: string, type: "error" | "ok" = "ok") {
     setToast({ msg, type });
@@ -173,6 +176,46 @@ export default function SpacesView() {
     ]);
     setNodes(n);
     setEdges(e);
+    setAllSpaceNodes(prev => ({ ...prev, [spaceId]: n }));
+  }
+
+  async function loadPanelNodes(spaceId: string) {
+    if (allSpaceNodes[spaceId]) return; // already loaded
+    const db = await getDb();
+    const n = await db.select<SpaceNode[]>(
+      "SELECT * FROM space_nodes WHERE space_id = ? ORDER BY created_at ASC", [spaceId]
+    );
+    setAllSpaceNodes(prev => ({ ...prev, [spaceId]: n }));
+  }
+
+  function toggleExpand(spaceId: string) {
+    setExpandedSpaces(prev => {
+      const next = new Set(prev);
+      if (next.has(spaceId)) {
+        next.delete(spaceId);
+      } else {
+        next.add(spaceId);
+        loadPanelNodes(spaceId);
+      }
+      return next;
+    });
+    setActiveSpace(spaceId);
+  }
+
+  function nodeIcon(node: SpaceNode) {
+    if (node.node_type === "link") return <Globe size={12} />;
+    const ext = (node.file_path ?? node.title).split(".").pop()?.toLowerCase() ?? "";
+    if (ext === "pdf") return <FileText size={12} color="#ef4444" />;
+    if (["png","jpg","jpeg","gif","webp","svg"].includes(ext)) return <Image size={12} color="#22c55e" />;
+    if (["md","txt","csv"].includes(ext)) return <FileCode size={12} color="#3b82f6" />;
+    return <File size={12} />;
+  }
+
+  async function openNode(node: SpaceNode) {
+    try {
+      if (node.node_type === "link" && node.url) await tauriOpenUrl(node.url);
+      else if (node.node_type === "file" && node.file_path) await openPath(node.file_path);
+    } catch (e) { console.error(e); }
   }
 
   useEffect(() => { loadSpaces(); }, []);
@@ -301,25 +344,54 @@ export default function SpacesView() {
           <span className="spaces-panel-title">Spaces</span>
         </div>
 
-        <ul className="spaces-list">
-          {spaces.map(s => (
-            <li
-              key={s.id}
-              className={`space-item ${s.id === activeSpace ? "active" : ""}`}
-              onClick={() => setActiveSpace(s.id)}
-            >
-              <span className="space-dot" />
-              <span className="space-name">{s.name}</span>
-              <button
-                className="space-delete"
-                onClick={e => { e.stopPropagation(); deleteSpace(s.id); }}
-                title="Delete space"
-              >
-                <Trash2 size={12} />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="spaces-tree">
+          {spaces.map(s => {
+            const expanded = expandedSpaces.has(s.id);
+            const isActive = s.id === activeSpace;
+            const panelNodes = allSpaceNodes[s.id] ?? [];
+            return (
+              <div key={s.id} className="tree-section">
+                {/* Space header row */}
+                <div
+                  className={`tree-space-row ${isActive ? "active" : ""}`}
+                  onClick={() => toggleExpand(s.id)}
+                >
+                  <span className="tree-chevron">
+                    {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  </span>
+                  <span className="tree-space-name">{s.name}</span>
+                  <button
+                    className="space-delete"
+                    onClick={e => { e.stopPropagation(); deleteSpace(s.id); }}
+                    title="Delete space"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+
+                {/* Node list */}
+                {expanded && (
+                  <ul className="tree-node-list">
+                    {panelNodes.length === 0 && (
+                      <li className="tree-node-empty">Empty space</li>
+                    )}
+                    {panelNodes.map(node => (
+                      <li
+                        key={node.id}
+                        className="tree-node-item"
+                        onClick={() => openNode(node)}
+                        title={node.url ?? node.file_path ?? node.title}
+                      >
+                        <span className="tree-node-icon">{nodeIcon(node)}</span>
+                        <span className="tree-node-label">{node.title}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </div>
 
         <div className="spaces-new">
           <input
