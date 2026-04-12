@@ -14,6 +14,11 @@ export default defineConfig(async () => ({
     },
   },
 
+  // Pre-bundle heavy deps so Vite doesn't re-process them on every HMR update
+  optimizeDeps: {
+    include: ["@excalidraw/excalidraw"],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
