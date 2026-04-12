@@ -3,11 +3,14 @@ import { Handle, Position, NodeProps } from "@xyflow/react";
 
 export interface CircleNodeData {
   title: string;
-  node_type: "link" | "file" | "note";
+  node_type: "link" | "file" | "note" | "doc";
+  file_path: string | null;
   tags: string[];
   color: string | null;
   onDelete: (id: string) => void;
   onColorChange: (id: string, color: string) => void;
+  onOpen?: (id: string) => void;
+  onFileOpen?: (id: string, filePath: string) => void;
   [key: string]: unknown;
 }
 
@@ -21,6 +24,7 @@ const TYPE_DEFAULTS: Record<string, string> = {
   link: "#3b82f6",
   file: "#ef4444",
   note: "#f59e0b",
+  doc:  "#22c55e",
 };
 
 export function tagColor(tag: string) {
@@ -50,8 +54,25 @@ export const CircleNode = memo(({ id, data }: NodeProps) => {
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
 
-      <div className="circle-node-inner">
-        <span className="circle-node-initials">{initials}</span>
+      <div
+        className="circle-node-inner"
+        onClick={e => {
+          e.stopPropagation();
+          if (d.node_type === "doc") {
+            d.onOpen?.(id);
+          } else if (d.node_type === "file" && d.file_path?.toLowerCase().endsWith(".pdf")) {
+            d.onFileOpen?.(id, d.file_path);
+          }
+        }}
+        style={(d.node_type === "doc" || (d.node_type === "file" && d.file_path?.toLowerCase().endsWith(".pdf"))) ? { cursor: "pointer" } : undefined}
+        title={d.node_type === "doc" ? "Open doc" : d.node_type === "file" ? "Open PDF" : undefined}
+      >
+        {d.node_type === "doc"
+          ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📄</span>
+          : d.node_type === "file" && d.file_path?.toLowerCase().endsWith(".pdf")
+            ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📕</span>
+            : <span className="circle-node-initials">{initials}</span>
+        }
       </div>
       <span className="circle-node-label">{d.title}</span>
 

@@ -68,6 +68,21 @@ fn scan_space_folder(folder_path: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
+/// Reads a file from disk and returns raw bytes over the binary IPC channel.
+#[tauri::command]
+fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
+    println!("[PDF] read_file_bytes called: {}", path);
+    let exists = std::path::Path::new(&path).exists();
+    println!("[PDF] file exists: {}", exists);
+    let bytes = std::fs::read(&path).map_err(|e| {
+        let msg = format!("Cannot read '{}': {}", path, e);
+        eprintln!("[PDF] ERROR: {}", msg);
+        msg
+    })?;
+    println!("[PDF] read {} bytes OK", bytes.len());
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 /// Copies a file into the app's data dir under `files/<space_id>/`.
 /// Returns the absolute destination path.
 #[tauri::command]
@@ -122,7 +137,7 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, list_daemon_folders])
+        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, list_daemon_folders, read_file_bytes])
         .setup(|app| {
             let db_path = app
                 .path()
@@ -132,7 +147,6 @@ pub fn run() {
 
             sync::advertise_and_serve(db_path);
 
-            #[cfg(debug_assertions)]
             {
                 let window = app.get_webview_window("main").unwrap();
                 window.open_devtools();

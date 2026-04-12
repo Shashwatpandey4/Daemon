@@ -10,7 +10,7 @@ import ContextMenu, { type CtxItem } from "../components/ContextMenu";
 export interface SpaceNode {
   id: string; space_id: string; title: string;
   content: string | null; url: string | null; file_path: string | null;
-  node_type: "link" | "file" | "note";
+  node_type: "link" | "file" | "note" | "doc";
   tags: string | null; color: string | null;
   pos_x: number; pos_y: number; created_at: number;
 }
@@ -24,6 +24,8 @@ interface Props {
   refreshKey: number;
   openAddNode: boolean;
   onAddNodeClose: () => void;
+  onNodeOpen: (nodeId: string) => void;
+  onFileOpen: (nodeId: string, filePath: string) => void;
 }
 
 let db: Awaited<ReturnType<typeof Database.load>> | null = null;
@@ -39,7 +41,7 @@ function nextNodePos(count: number) {
 
 interface CtxState { x: number; y: number; items: CtxItem[] }
 
-export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNodeClose }: Props) {
+export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNodeClose, onNodeOpen, onFileOpen }: Props) {
   const [nodes, setNodes] = useState<SpaceNode[]>([]);
   const [edges, setEdges] = useState<SpaceEdge[]>([]);
   const [showAddNode, setShowAddNode] = useState(false);
@@ -166,10 +168,24 @@ export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNode
     setEdges(prev => prev.filter(e => e.source !== id && e.target !== id));
   }, []);
 
+  async function createDoc() {
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    const { x, y } = nextNodePos(nodes.length);
+    await db.execute(
+      `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, spaceId, "Untitled", "", null, null, "doc", JSON.stringify([]), x, y, Date.now()]
+    );
+    await loadGraph();
+    onNodeOpen(id);
+  }
+
   function onCanvasCtx(e: React.MouseEvent) {
     e.preventDefault();
     setCtx({ x: e.clientX, y: e.clientY, items: [
       { label: "Add Node", onClick: () => setShowAddNode(true) },
+      { label: "New Doc", onClick: createDoc },
     ]});
   }
 
@@ -184,6 +200,8 @@ export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNode
         onNodeRename={handleNodeRename}
         onNodeDelete={handleNodeDelete}
         onColorChange={handleColorChange}
+        onNodeOpen={onNodeOpen}
+        onFileOpen={onFileOpen}
       />
       {showAddNode && (
         <AddNodeModal

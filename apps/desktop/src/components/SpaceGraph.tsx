@@ -48,6 +48,8 @@ interface Props {
   onNodeDelete: (id: string) => void;
   onNodeRename: (id: string, title: string) => void;
   onColorChange: (id: string, color: string) => void;
+  onNodeOpen: (id: string) => void;
+  onFileOpen: (id: string, filePath: string) => void;
 }
 
 function toFlowEdge(e: SpaceEdge, onDelete: (id: string) => void): Edge {
@@ -60,7 +62,7 @@ function toFlowEdge(e: SpaceEdge, onDelete: (id: string) => void): Edge {
   };
 }
 
-export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdgeDelete, onNodeDelete, onNodeRename, onColorChange }: Props) {
+export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdgeDelete, onNodeDelete, onNodeRename, onColorChange, onNodeOpen, onFileOpen }: Props) {
   const [flowNodes, setFlowNodes] = useState<Node[]>([]);
   const [flowEdges, setFlowEdges] = useState<Edge[]>([]);
   const [fitTrigger, setFitTrigger] = useState(0);
@@ -103,11 +105,11 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdge
       .on("tick", () => {
         setFlowNodes(simNodes.map(n => {
           positionedRef.current.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 });
-          return buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange);
+          return buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange, onNodeOpen, onFileOpen);
         }));
       })
       .on("end", () => {
-        setFlowNodes(simNodes.map(n => buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange)));
+        setFlowNodes(simNodes.map(n => buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange, onNodeOpen, onFileOpen)));
         setFitTrigger(t => t + 1);
       });
 
@@ -115,7 +117,7 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdge
     setFlowEdges(edges.map(e => toFlowEdge(e, edgeDeleteCb)));
 
     return () => { sim.stop(); };
-  }, [nodes, edges, edgeDeleteCb, onNodeDelete, onNodeRename]);
+  }, [nodes, edges, edgeDeleteCb, onNodeDelete, onNodeRename, onNodeOpen, onFileOpen]);
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setFlowNodes(nds => applyNodeChanges(changes, nds));
@@ -185,6 +187,8 @@ function buildFlowNode(
   onDelete: (id: string) => void,
   onRename: (id: string, title: string) => void,
   onColorChange: (id: string, color: string) => void,
+  onOpen: (id: string) => void,
+  onFileOpen: (id: string, filePath: string) => void,
 ): Node {
   const src = sourceNodes.find(s => s.id === n.id);
   return {
@@ -195,11 +199,14 @@ function buildFlowNode(
     data: {
       title: src?.title ?? "",
       node_type: src?.node_type ?? "note",
+      file_path: src?.file_path ?? null,
       tags: src?.tags ? JSON.parse(src.tags) : [],
       color: src?.color ?? null,
       onDelete,
       onRename,
       onColorChange,
+      onOpen,
+      onFileOpen,
     } satisfies CircleNodeData,
   };
 }

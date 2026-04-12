@@ -10,6 +10,11 @@
     "sql:allow-execute",
     "sql:allow-select",
     "sql:allow-load",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "fs:allow-read-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [{ "path": "$HOME/Daemon/**" }]
+    }
   ]
 }

@@ -3,7 +3,7 @@ import Database from "@tauri-apps/plugin-sql";
 import {
   CheckSquare, Pencil, Boxes,
   ChevronRight, ChevronDown,
-  Globe, FileText, Image, File, FileCode, StickyNote,
+  Globe, FileText, Image, File, FileCode, StickyNote, NotebookPen,
 } from "lucide-react";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,7 +17,7 @@ interface Board { id: string; name: string; created_at: number; }
 interface Space { id: string; name: string; folder_path: string | null; created_at: number; }
 interface SpaceNode {
   id: string; space_id: string; title: string;
-  node_type: "link" | "file" | "note";
+  node_type: "link" | "file" | "note" | "doc";
   url: string | null; file_path: string | null;
 }
 
@@ -64,6 +64,13 @@ async function getDb() {
     `);
     // Migration: add folder_path to existing installs
     try { await db.execute("ALTER TABLE spaces ADD COLUMN folder_path TEXT"); } catch { /* already exists */ }
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT 'Untitled',
+        content TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      )
+    `);
     await db.execute(`
       CREATE TABLE IF NOT EXISTS space_nodes (
         id TEXT PRIMARY KEY, space_id TEXT NOT NULL,
@@ -275,9 +282,20 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   }
 
   async function openNode(node: SpaceNode) {
+    if (node.node_type === "doc") {
+      onActivate({ type: "note", noteId: node.id });
+      return;
+    }
+    if (node.node_type === "file" && node.file_path) {
+      if (node.file_path.toLowerCase().endsWith(".pdf")) {
+        onActivate({ type: "pdf", nodeId: node.id, filePath: node.file_path });
+        return;
+      }
+      try { await tauriOpenUrl(node.file_path); } catch { /* ignore */ }
+      return;
+    }
     try {
       if (node.node_type === "link" && node.url) await tauriOpenUrl(node.url);
-      else if (node.node_type === "file" && node.file_path) await invoke("open_file", { path: node.file_path });
     } catch { /* ignore */ }
   }
 
@@ -296,6 +314,7 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   }
 
   function nodeIcon(n: SpaceNode) {
+    if (n.node_type === "doc")  return <NotebookPen size={11} color="#22c55e" />;
     if (n.node_type === "link") return <Globe size={11} color="#3b82f6" />;
     if (n.node_type === "note") return <StickyNote size={11} color="#f59e0b" />;
     const ext = (n.file_path ?? n.title).split(".").pop()?.toLowerCase() ?? "";
@@ -338,10 +357,24 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
       { label: "New Space", onClick: () => { setSections(s => ({ ...s, spaces: true })); setAddingSpace(true); } },
     ]});
   }
+  async function createDoc(spaceId: string) {
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    await db.execute(
+      `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, spaceId, "Untitled", "", null, null, "doc", JSON.stringify([]), 0, 0, now]
+    );
+    await loadSpaceNodes(spaceId);
+    onActivate({ type: "note", noteId: id });
+  }
+
   function ctxSpaceRow(e: React.MouseEvent, s: Space) {
     e.preventDefault(); e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items: [
       { label: "Add Node", onClick: () => onActivate({ type: "spaces", spaceId: s.id, openAddNode: true }) },
+      { label: "New Doc", onClick: () => createDoc(s.id) },
       { label: "Delete Space", onClick: () => deleteSpace(s.id), danger: true, separator: true },
     ]});
   }
