@@ -14,7 +14,7 @@ import type { ActiveView } from "../App";
 
 interface Todo { id: string; title: string; completed: boolean; }
 interface Board { id: string; name: string; created_at: number; }
-interface Space { id: string; name: string; created_at: number; }
+interface Space { id: string; name: string; folder_path: string | null; created_at: number; }
 interface SpaceNode {
   id: string; space_id: string; title: string;
   node_type: "link" | "file" | "note";
@@ -59,7 +59,19 @@ async function getDb() {
     `);
     await db.execute(`
       CREATE TABLE IF NOT EXISTS spaces (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL
+        id TEXT PRIMARY KEY, name TEXT NOT NULL, folder_path TEXT, created_at INTEGER NOT NULL
+      )
+    `);
+    // Migration: add folder_path to existing installs
+    try { await db.execute("ALTER TABLE spaces ADD COLUMN folder_path TEXT"); } catch { /* already exists */ }
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS space_nodes (
+        id TEXT PRIMARY KEY, space_id TEXT NOT NULL,
+        title TEXT NOT NULL, content TEXT, url TEXT, file_path TEXT,
+        node_type TEXT NOT NULL DEFAULT 'note',
+        tags TEXT, color TEXT,
+        pos_x REAL NOT NULL DEFAULT 0, pos_y REAL NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
       )
     `);
     await db.execute(`
@@ -130,7 +142,43 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
 
   async function loadSpaces() {
     const db = await getDb();
-    setSpaces(await db.select<Space[]>("SELECT id, name, created_at FROM spaces ORDER BY created_at ASC"));
+    const rows = await db.select<Space[]>("SELECT id, name, folder_path, created_at FROM spaces ORDER BY created_at ASC");
+
+    // Backfill folders for spaces that predate this feature
+    for (const s of rows) {
+      if (!s.folder_path) {
+        try {
+          const fp = await invoke<string>("setup_space_folder", { name: s.name });
+          await db.execute("UPDATE spaces SET folder_path = ? WHERE id = ?", [fp, s.id]);
+          s.folder_path = fp;
+        } catch { /* ignore */ }
+      }
+    }
+
+    // Auto-create spaces for folders in ~/Daemon/ that aren't in the DB yet
+    try {
+      const folders = await invoke<string[]>("list_daemon_folders");
+      const knownPaths = new Set(rows.map(s => s.folder_path).filter(Boolean));
+      let added = false;
+      for (const folderPath of folders) {
+        if (!knownPaths.has(folderPath)) {
+          const name = folderPath.split("/").pop() ?? folderPath;
+          const id = crypto.randomUUID();
+          await db.execute(
+            "INSERT INTO spaces (id, name, folder_path, created_at) VALUES (?, ?, ?, ?)",
+            [id, name, folderPath, Date.now()]
+          );
+          added = true;
+        }
+      }
+      if (added) {
+        const updated = await db.select<Space[]>("SELECT id, name, folder_path, created_at FROM spaces ORDER BY created_at ASC");
+        setSpaces(updated);
+        return;
+      }
+    } catch { /* ignore */ }
+
+    setSpaces(rows);
   }
 
   async function loadSpaceNodes(spaceId: string) {
@@ -200,7 +248,9 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
     if (!n) return;
     const db = await getDb();
     const id = crypto.randomUUID();
-    await db.execute("INSERT INTO spaces (id, name, created_at) VALUES (?, ?, ?)", [id, n, Date.now()]);
+    let folderPath: string | null = null;
+    try { folderPath = await invoke<string>("setup_space_folder", { name: n }); } catch { /* ignore */ }
+    await db.execute("INSERT INTO spaces (id, name, folder_path, created_at) VALUES (?, ?, ?, ?)", [id, n, folderPath, Date.now()]);
     await loadSpaces();
     onActivate({ type: "spaces", spaceId: id });
     setExpandedSpaces(prev => new Set([...prev, id]));

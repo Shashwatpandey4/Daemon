@@ -20,6 +20,54 @@ fn open_file(path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns all immediate subdirectory paths inside ~/Daemon/.
+#[tauri::command]
+fn list_daemon_folders() -> Result<Vec<String>, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let daemon_dir = std::path::PathBuf::from(home).join("Daemon");
+    if !daemon_dir.exists() {
+        std::fs::create_dir_all(&daemon_dir).map_err(|e| e.to_string())?;
+        return Ok(vec![]);
+    }
+    let entries = std::fs::read_dir(&daemon_dir).map_err(|e| e.to_string())?;
+    let folders = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.path().to_string_lossy().to_string())
+        .collect();
+    Ok(folders)
+}
+
+/// Creates ~/Daemon/<sanitized-name>/ and returns the absolute path.
+#[tauri::command]
+fn setup_space_folder(name: String) -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let sanitized: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' { c } else { '_' })
+        .collect();
+    let sanitized = sanitized.trim().to_string();
+    let folder = std::path::PathBuf::from(home).join("Daemon").join(&sanitized);
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    Ok(folder.to_string_lossy().to_string())
+}
+
+/// Lists all files (non-recursive) in a folder. Returns their absolute paths.
+#[tauri::command]
+fn scan_space_folder(folder_path: String) -> Result<Vec<String>, String> {
+    let path = std::path::PathBuf::from(&folder_path);
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+    let files = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .map(|e| e.path().to_string_lossy().to_string())
+        .collect();
+    Ok(files)
+}
+
 /// Copies a file into the app's data dir under `files/<space_id>/`.
 /// Returns the absolute destination path.
 #[tauri::command]
@@ -74,7 +122,7 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file])
+        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, list_daemon_folders])
         .setup(|app| {
             let db_path = app
                 .path()

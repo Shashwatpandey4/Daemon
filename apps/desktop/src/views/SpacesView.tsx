@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Database from "@tauri-apps/plugin-sql";
 import { invoke } from "@tauri-apps/api/core";
+import { basename, extname } from "@tauri-apps/api/path";
 
 import SpaceGraph from "../components/SpaceGraph";
 import AddNodeModal, { type NodeDraft } from "../components/AddNodeModal";
@@ -52,10 +53,44 @@ export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNode
 
   async function loadGraph() {
     const db = await getDb();
-    const [n, e] = await Promise.all([
+    const [n, e, spaceRows] = await Promise.all([
       db.select<SpaceNode[]>("SELECT * FROM space_nodes WHERE space_id = ? ORDER BY created_at ASC", [spaceId]),
       db.select<SpaceEdge[]>("SELECT * FROM space_edges WHERE space_id = ?", [spaceId]),
+      db.select<{ folder_path: string | null }[]>("SELECT folder_path FROM spaces WHERE id = ?", [spaceId]),
     ]);
+
+    const folderPath = spaceRows[0]?.folder_path;
+    if (folderPath) {
+      try {
+        const files = await invoke<string[]>("scan_space_folder", { folderPath });
+        const knownPaths = new Set(n.map(node => node.file_path).filter(Boolean));
+        const newFiles = files.filter(f => !knownPaths.has(f));
+        let insertCount = 0;
+        for (const filePath of newFiles) {
+          const fileName = await basename(filePath);
+          const ext = await extname(filePath);
+          const title = fileName.replace(new RegExp(`\\.${ext}$`, "i"), "") || fileName;
+          const id = crypto.randomUUID();
+          const { x, y } = nextNodePos(n.length + insertCount);
+          await db.execute(
+            `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, spaceId, title, null, null, filePath, "file", JSON.stringify([]), x, y, Date.now()]
+          );
+          insertCount++;
+        }
+        if (insertCount > 0) {
+          const [n2, e2] = await Promise.all([
+            db.select<SpaceNode[]>("SELECT * FROM space_nodes WHERE space_id = ? ORDER BY created_at ASC", [spaceId]),
+            db.select<SpaceEdge[]>("SELECT * FROM space_edges WHERE space_id = ?", [spaceId]),
+          ]);
+          setNodes(n2);
+          setEdges(e2);
+          return;
+        }
+      } catch { /* folder scan failed, fall through */ }
+    }
+
     setNodes(n);
     setEdges(e);
   }
