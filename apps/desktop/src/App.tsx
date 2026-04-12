@@ -1,63 +1,48 @@
 import { useState } from "react";
-import { CheckSquare, Pencil, Boxes, ChevronLeft, ChevronRight } from "lucide-react";
-import TodoView from "./views/TodoView";
+import Sidebar from "./components/Sidebar";
 import WhiteboardView from "./views/WhiteboardView";
 import SpacesView from "./views/SpacesView";
 import "./App.css";
 
-type View = "todo" | "whiteboard" | "spaces";
-
-const NAV_ITEMS: { id: View; label: string; icon: React.ReactNode }[] = [
-  { id: "todo",       label: "Todo",       icon: <CheckSquare size={18} /> },
-  { id: "whiteboard", label: "Whiteboard", icon: <Pencil size={18} /> },
-  { id: "spaces",     label: "Spaces",     icon: <Boxes size={18} /> },
-];
-
-function renderView(view: View) {
-  switch (view) {
-    case "todo":       return <TodoView />;
-    case "whiteboard": return <WhiteboardView />;
-    case "spaces":     return <SpacesView />;
-  }
-}
+export type ActiveView =
+  | { type: "whiteboard"; boardId: string }
+  | { type: "spaces"; spaceId: string; openAddNode?: boolean }
+  | null;
 
 export default function App() {
-  const [activeView, setActiveView] = useState<View>("todo");
-  const [collapsed, setCollapsed] = useState(false);
+  const [active, setActive] = useState<ActiveView>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  function handleActivate(view: ActiveView) {
+    // If re-selecting the same space with openAddNode, just toggle the flag
+    setActive(view);
+  }
+
+  function handleDataChange() {
+    setRefreshKey(k => k + 1);
+  }
 
   return (
     <div className="app-shell">
-      {/* Sidebar */}
-      <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
-        <div className="sidebar-top">
-          {!collapsed && <span className="app-title">Daemon</span>}
-          <button
-            className="collapse-btn"
-            onClick={() => setCollapsed(c => !c)}
-            title={collapsed ? "Expand" : "Collapse"}
-          >
-            {collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
-          </button>
-        </div>
-
-        <nav className="sidebar-nav">
-          {NAV_ITEMS.map(item => (
-            <button
-              key={item.id}
-              className={`nav-item ${activeView === item.id ? "active" : ""}`}
-              onClick={() => setActiveView(item.id)}
-              title={collapsed ? item.label : undefined}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {!collapsed && <span className="nav-label">{item.label}</span>}
-            </button>
-          ))}
-        </nav>
-      </aside>
-
-      {/* Main content */}
-      <main className="main-content">
-        {renderView(activeView)}
+      <Sidebar active={active} onActivate={handleActivate} onDataChange={handleDataChange} />
+      <main className="main-area">
+        {active?.type === "whiteboard" && (
+          <WhiteboardView key={active.boardId} boardId={active.boardId} />
+        )}
+        {active?.type === "spaces" && (
+          <SpacesView
+            key={active.spaceId}
+            spaceId={active.spaceId}
+            refreshKey={refreshKey}
+            openAddNode={!!active.openAddNode}
+            onAddNodeClose={() => setActive(a => a?.type === "spaces" ? { ...a, openAddNode: false } : a)}
+          />
+        )}
+        {!active && (
+          <div className="placeholder-view">
+            <p>Select an item from the sidebar</p>
+          </div>
+        )}
       </main>
     </div>
   );

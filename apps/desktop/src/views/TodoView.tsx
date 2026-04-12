@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Database from "@tauri-apps/plugin-sql";
-import { Plus, Trash2 } from "lucide-react";
+import { CheckSquare } from "lucide-react";
+import ContextMenu, { type CtxItem } from "../components/ContextMenu";
 
 interface Todo {
   id: string;
@@ -30,9 +31,13 @@ async function getDb() {
   return db;
 }
 
+interface CtxState { x: number; y: number; items: CtxItem[] }
+
 export default function TodoView() {
   const [todos, setTodos] = useState<Todo[]>([]);
-  const [input, setInput] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [ctx, setCtx] = useState<CtxState | null>(null);
+  const addInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     const db = await getDb();
@@ -44,23 +49,20 @@ export default function TodoView() {
 
   useEffect(() => { load(); }, []);
 
-  async function addTodo() {
-    if (!input.trim()) return;
+  useEffect(() => {
+    if (adding) addInputRef.current?.focus();
+  }, [adding]);
+
+  async function addTodo(title: string) {
+    const t = title.trim();
+    if (!t) { setAdding(false); return; }
     const db = await getDb();
     const now = Date.now();
-    const todo: Todo = {
-      id: crypto.randomUUID(),
-      title: input.trim(),
-      completed: false,
-      created_at: now,
-      updated_at: now,
-      deleted: false,
-    };
     await db.execute(
-      "INSERT INTO todos (id, title, completed, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?)",
-      [todo.id, todo.title, 0, todo.created_at, todo.updated_at, 0]
+      "INSERT INTO todos (id, title, completed, created_at, updated_at, deleted) VALUES (?, ?, 0, ?, ?, 0)",
+      [crypto.randomUUID(), t, now, now]
     );
-    setInput("");
+    setAdding(false);
     load();
   }
 
@@ -82,71 +84,113 @@ export default function TodoView() {
     load();
   }
 
+  function onBodyCtx(e: React.MouseEvent) {
+    e.preventDefault();
+    setCtx({
+      x: e.clientX, y: e.clientY,
+      items: [
+        { label: "New Task", onClick: () => setAdding(true) },
+      ],
+    });
+  }
+
+  function onItemCtx(e: React.MouseEvent, todo: Todo) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtx({
+      x: e.clientX, y: e.clientY,
+      items: [
+        {
+          label: todo.completed ? "Mark Incomplete" : "Mark Complete",
+          onClick: () => toggleTodo(todo.id, todo.completed),
+        },
+        {
+          label: "Delete",
+          onClick: () => deleteTodo(todo.id),
+          danger: true,
+          separator: true,
+        },
+      ],
+    });
+  }
+
   const pending = todos.filter(t => !t.completed);
   const done = todos.filter(t => t.completed);
 
   return (
-    <div className="view-container">
-      <div className="view-header">
-        <h2>Todo</h2>
-        <span className="badge">{pending.length} remaining</span>
+    <div className="col-view">
+      {/* Column header */}
+      <div className="col-header">
+        <CheckSquare size={14} className="col-header-icon" />
+        <span className="col-title">Todo</span>
+        {pending.length > 0 && <span className="badge">{pending.length}</span>}
       </div>
 
-      <div className="todo-input-row">
-        <input
-          className="todo-input"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && addTodo()}
-          placeholder="New task..."
-        />
-        <button className="btn-primary icon-btn" onClick={addTodo} title="Add">
-          <Plus size={16} />
-        </button>
-      </div>
+      {/* Column body */}
+      <div className="col-body" onContextMenu={onBodyCtx}>
+        {/* Inline add input */}
+        {adding && (
+          <div className="todo-add-row">
+            <input
+              ref={addInputRef}
+              className="todo-add-input"
+              placeholder="Task name…"
+              onKeyDown={e => {
+                if (e.key === "Enter") addTodo(e.currentTarget.value);
+                if (e.key === "Escape") setAdding(false);
+              }}
+              onBlur={e => addTodo(e.target.value)}
+            />
+          </div>
+        )}
 
-      {todos.length === 0 && (
-        <p className="empty-state">No tasks yet. Add one above.</p>
-      )}
+        {todos.length === 0 && !adding && (
+          <p className="empty-state">Right-click to add a task</p>
+        )}
 
-      {pending.length > 0 && (
-        <ul className="todo-list">
-          {pending.map(todo => (
-            <li key={todo.id} className="todo-item">
-              <input
-                type="checkbox"
-                checked={false}
-                onChange={() => toggleTodo(todo.id, todo.completed)}
-              />
-              <span className="todo-title">{todo.title}</span>
-              <button className="icon-btn ghost" onClick={() => deleteTodo(todo.id)} title="Delete">
-                <Trash2 size={14} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {done.length > 0 && (
-        <>
-          <p className="section-label">Completed</p>
+        {pending.length > 0 && (
           <ul className="todo-list">
-            {done.map(todo => (
-              <li key={todo.id} className="todo-item done">
+            {pending.map(todo => (
+              <li
+                key={todo.id}
+                className="todo-item"
+                onContextMenu={e => onItemCtx(e, todo)}
+              >
                 <input
                   type="checkbox"
-                  checked={true}
+                  checked={false}
                   onChange={() => toggleTodo(todo.id, todo.completed)}
                 />
                 <span className="todo-title">{todo.title}</span>
-                <button className="icon-btn ghost" onClick={() => deleteTodo(todo.id)} title="Delete">
-                  <Trash2 size={14} />
-                </button>
               </li>
             ))}
           </ul>
-        </>
-      )}
+        )}
+
+        {done.length > 0 && (
+          <>
+            <p className="section-label" style={{ padding: "0 16px" }}>Completed</p>
+            <ul className="todo-list">
+              {done.map(todo => (
+                <li
+                  key={todo.id}
+                  className="todo-item done"
+                  onContextMenu={e => onItemCtx(e, todo)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={true}
+                    onChange={() => toggleTodo(todo.id, todo.completed)}
+                  />
+                  <span className="todo-title">{todo.title}</span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+
+      {ctx && <ContextMenu {...ctx} onClose={() => setCtx(null)} />}
     </div>
   );
 }
