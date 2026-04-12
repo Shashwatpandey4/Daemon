@@ -24,6 +24,7 @@ export interface SpaceNode {
   file_path: string | null;
   node_type: "link" | "file" | "note";
   tags: string | null;   // JSON array string
+  color: string | null;
   pos_x: number;
   pos_y: number;
   created_at: number;
@@ -98,7 +99,7 @@ async function getDb() {
       `);
     }
     // Add any missing columns (idempotent)
-    for (const col of ["content TEXT", "file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'note'", "tags TEXT"]) {
+    for (const col of ["content TEXT", "file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'note'", "tags TEXT", "color TEXT"]) {
       try { await db.execute(`ALTER TABLE space_nodes ADD COLUMN ${col}`); } catch { /* exists */ }
     }
     await db.execute(`
@@ -298,6 +299,16 @@ export default function SpacesView() {
     setNodes(prev => prev.map(n => n.id === id ? { ...n, title } : n));
   }, []);
 
+  const handleColorChange = useCallback(async (id: string, color: string) => {
+    const db = await getDb();
+    await db.execute("UPDATE space_nodes SET color = ? WHERE id = ?", [color, id]);
+    setNodes(prev => prev.map(n => n.id === id ? { ...n, color } : n));
+    if (activeSpace) setAllSpaceNodes(prev => ({
+      ...prev,
+      [activeSpace]: (prev[activeSpace] ?? []).map(n => n.id === id ? { ...n, color } : n),
+    }));
+  }, [activeSpace]);
+
   const handleEdgeDelete = useCallback(async (id: string) => {
     const db = await getDb();
     await db.execute("DELETE FROM space_edges WHERE id = ?", [id]);
@@ -414,6 +425,7 @@ export default function SpacesView() {
                 onEdgeDelete={handleEdgeDelete}
                 onNodeRename={handleNodeRename}
                 onNodeDelete={handleNodeDelete}
+                onColorChange={handleColorChange}
               />
             </div>
 

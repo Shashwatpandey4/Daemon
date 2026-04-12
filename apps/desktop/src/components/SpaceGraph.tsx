@@ -37,6 +37,7 @@ interface Props {
   onEdgeDelete: (id: string) => void;
   onNodeDelete: (id: string) => void;
   onNodeRename: (id: string, title: string) => void;
+  onColorChange: (id: string, color: string) => void;
 }
 
 function toFlowEdge(e: SpaceEdge, onDelete: (id: string) => void): Edge {
@@ -49,7 +50,7 @@ function toFlowEdge(e: SpaceEdge, onDelete: (id: string) => void): Edge {
   };
 }
 
-export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdgeDelete, onNodeDelete, onNodeRename }: Props) {
+export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdgeDelete, onNodeDelete, onNodeRename, onColorChange }: Props) {
   const [flowNodes, setFlowNodes] = useState<Node[]>([]);
   const [flowEdges, setFlowEdges] = useState<Edge[]>([]);
   const simRef = useRef<d3.Simulation<SimNode, undefined> | null>(null);
@@ -91,11 +92,11 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdge
       .on("tick", () => {
         setFlowNodes(simNodes.map(n => {
           positionedRef.current.set(n.id, { x: n.x ?? 0, y: n.y ?? 0 });
-          return buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename);
+          return buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange);
         }));
       })
       .on("end", () => {
-        setFlowNodes(simNodes.map(n => buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename)));
+        setFlowNodes(simNodes.map(n => buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange)));
       });
 
     simRef.current = sim;
@@ -171,6 +172,7 @@ function buildFlowNode(
   draggingRef: React.RefObject<Set<string>>,
   onDelete: (id: string) => void,
   onRename: (id: string, title: string) => void,
+  onColorChange: (id: string, color: string) => void,
 ): Node {
   const src = sourceNodes.find(s => s.id === n.id);
   return {
@@ -182,8 +184,10 @@ function buildFlowNode(
       title: src?.title ?? "",
       node_type: src?.node_type ?? "note",
       tags: src?.tags ? JSON.parse(src.tags) : [],
+      color: src?.color ?? null,
       onDelete,
       onRename,
+      onColorChange,
     } satisfies CircleNodeData,
   };
 }
