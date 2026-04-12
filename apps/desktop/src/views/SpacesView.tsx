@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Database from "@tauri-apps/plugin-sql";
-import { Plus, Trash2, Link2 } from "lucide-react";
+import { Plus, Trash2, Link2, Upload } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import SpaceGraph from "../components/SpaceGraph";
 
 const MIN_PANEL_WIDTH = 160;
@@ -16,7 +18,9 @@ export interface SpaceNode {
   id: string;
   space_id: string;
   title: string;
-  url: string;
+  url: string | null;
+  file_path: string | null;
+  node_type: "link" | "file";
   pos_x: number;
   pos_y: number;
   created_at: number;
@@ -46,12 +50,18 @@ async function getDb() {
         id TEXT PRIMARY KEY,
         space_id TEXT NOT NULL,
         title TEXT NOT NULL,
-        url TEXT NOT NULL,
+        url TEXT,
+        file_path TEXT,
+        node_type TEXT NOT NULL DEFAULT 'link',
         pos_x REAL NOT NULL DEFAULT 100,
         pos_y REAL NOT NULL DEFAULT 100,
         created_at INTEGER NOT NULL
       )
     `);
+    // Migrate: add new columns if this is an existing DB
+    for (const col of ["url TEXT", "file_path TEXT", "node_type TEXT NOT NULL DEFAULT 'link'"]) {
+      try { await db.execute(`ALTER TABLE space_nodes ADD COLUMN ${col}`); } catch { /* already exists */ }
+    }
     await db.execute(`
       CREATE TABLE IF NOT EXISTS space_edges (
         id TEXT PRIMARY KEY,
@@ -67,6 +77,13 @@ async function getDb() {
 function extractTitle(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ""); }
   catch { return url; }
+}
+
+function nextNodePos(count: number) {
+  return {
+    x: 80 + (count % 5) * 240,
+    y: 80 + Math.floor(count / 5) * 160,
+  };
 }
 
 export default function SpacesView() {
@@ -157,16 +174,48 @@ export default function SpacesView() {
     const title = linkTitle.trim() || extractTitle(url);
     const db = await getDb();
     const id = crypto.randomUUID();
-    // Stagger new nodes so they don't pile up
-    const offsetX = 80 + (nodes.length % 5) * 220;
-    const offsetY = 80 + Math.floor(nodes.length / 5) * 140;
+    const { x, y } = nextNodePos(nodes.length);
     await db.execute(
-      "INSERT INTO space_nodes (id, space_id, title, url, pos_x, pos_y, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [id, activeSpace, title, url, offsetX, offsetY, Date.now()]
+      "INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at) VALUES (?, ?, ?, ?, NULL, 'link', ?, ?, ?)",
+      [id, activeSpace, title, url, x, y, Date.now()]
     );
     setLinkUrl("");
     setLinkTitle("");
     setShowAddLink(false);
+    loadGraph(activeSpace);
+  }
+
+  async function addFile() {
+    if (!activeSpace) return;
+
+    const selected = await openDialog({
+      multiple: true,
+      filters: [
+        { name: "Documents", extensions: ["pdf", "md", "txt", "docx", "csv"] },
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+
+    if (!selected) return;
+    const files = Array.isArray(selected) ? selected : [selected];
+
+    const db = await getDb();
+    for (let i = 0; i < files.length; i++) {
+      const srcPath = files[i];
+      try {
+        const destPath = await invoke<string>("import_file", { spaceId: activeSpace, src: srcPath });
+        const fileName = destPath.split("/").pop() ?? srcPath.split("/").pop() ?? "file";
+        const id = crypto.randomUUID();
+        const { x, y } = nextNodePos(nodes.length + i);
+        await db.execute(
+          "INSERT INTO space_nodes (id, space_id, title, url, file_path, node_type, pos_x, pos_y, created_at) VALUES (?, ?, ?, NULL, ?, 'file', ?, ?, ?)",
+          [id, activeSpace, fileName, destPath, x, y, Date.now()]
+        );
+      } catch (err) {
+        console.error("import failed", srcPath, err);
+      }
+    }
     loadGraph(activeSpace);
   }
 
@@ -258,10 +307,16 @@ export default function SpacesView() {
           <>
             <div className="graph-toolbar">
               <span className="graph-title">{active?.name}</span>
-              <button className="btn-primary icon-btn" onClick={openAddLink}>
-                <Plus size={14} />
-                <span>Add link</span>
-              </button>
+              <div className="toolbar-actions">
+                <button className="btn-secondary icon-btn" onClick={addFile}>
+                  <Upload size={14} />
+                  <span>Add file</span>
+                </button>
+                <button className="btn-primary icon-btn" onClick={openAddLink}>
+                  <Plus size={14} />
+                  <span>Add link</span>
+                </button>
+              </div>
             </div>
 
             <div className="graph-canvas">

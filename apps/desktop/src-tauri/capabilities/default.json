@@ -8,6 +8,13 @@
     "opener:default",
     "sql:allow-execute",
     "sql:allow-select",
-    "sql:allow-load"
+    "sql:allow-load",
+    "dialog:allow-open",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-create",
+    "fs:allow-mkdir",
+    "fs:allow-exists",
+    "fs:default"
   ]
 }

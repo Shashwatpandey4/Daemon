@@ -14,9 +14,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { LinkNode, type LinkNodeData } from "./LinkNode";
+import { FileNode, type FileNodeData } from "./FileNode";
 import type { SpaceNode, SpaceEdge } from "../views/SpacesView";
 
-const NODE_TYPES = { link: LinkNode };
+const NODE_TYPES = { link: LinkNode, file: FileNode };
 
 interface Props {
   nodes: SpaceNode[];
@@ -31,14 +32,20 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onNode
   const rfNodes: Node[] = useMemo(() =>
     nodes.map(n => ({
       id: n.id,
-      type: "link",
+      type: n.node_type ?? "link",
       position: { x: n.pos_x, y: n.pos_y },
-      data: {
-        title: n.title,
-        url: n.url,
-        onRename: onNodeRename,
-        onDelete: onNodeDelete,
-      } satisfies LinkNodeData,
+      data: n.node_type === "file"
+        ? ({
+            title: n.title,
+            file_path: n.file_path ?? "",
+            onDelete: onNodeDelete,
+          } satisfies FileNodeData)
+        : ({
+            title: n.title,
+            url: n.url ?? "",
+            onRename: onNodeRename,
+            onDelete: onNodeDelete,
+          } satisfies LinkNodeData),
     })),
     [nodes, onNodeRename, onNodeDelete]
   );
