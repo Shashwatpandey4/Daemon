@@ -10,6 +10,16 @@ fn local_ip() -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
+/// Opens a file with the system default application.
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    std::process::Command::new("xdg-open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Copies a file into the app's data dir under `files/<space_id>/`.
 /// Returns the absolute destination path.
 #[tauri::command]
@@ -64,7 +74,7 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![local_ip, import_file])
+        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file])
         .setup(|app| {
             let db_path = app
                 .path()

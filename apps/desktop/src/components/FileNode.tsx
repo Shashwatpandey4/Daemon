@@ -1,7 +1,7 @@
 import { memo } from "react";
 import { Handle, Position, NodeProps } from "@xyflow/react";
 import { FileText, Image, File, FileCode, Trash2, ExternalLink } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface FileNodeData {
   title: string;
@@ -28,7 +28,7 @@ export const FileNode = memo(({ id, data }: NodeProps) => {
 
   async function openFile(e: React.MouseEvent) {
     e.stopPropagation();
-    try { await openPath(d.file_path); }
+    try { await invoke("open_file", { path: d.file_path }); }
     catch (err) { console.error("open failed", err); }
   }
 

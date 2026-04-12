@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Database from "@tauri-apps/plugin-sql";
 import { Plus, Trash2, Link2, Upload, ChevronRight, ChevronDown, FileText, Image, File, FileCode, Globe } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { openUrl as tauriOpenUrl, openPath } from "@tauri-apps/plugin-opener";
+import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import SpaceGraph from "../components/SpaceGraph";
 
@@ -214,7 +214,7 @@ export default function SpacesView() {
   async function openNode(node: SpaceNode) {
     try {
       if (node.node_type === "link" && node.url) await tauriOpenUrl(node.url);
-      else if (node.node_type === "file" && node.file_path) await openPath(node.file_path);
+      else if (node.node_type === "file" && node.file_path) await invoke("open_file", { path: node.file_path });
     } catch (e) { console.error(e); }
   }
 
