@@ -6,6 +6,7 @@ import {
   MiniMap,
   addEdge,
   BackgroundVariant,
+  useReactFlow,
   type OnConnect,
   type Node,
   type Edge,
@@ -23,6 +24,15 @@ import type { SpaceNode, SpaceEdge } from "../views/SpacesView";
 
 const NODE_TYPES = { circle: CircleNode };
 const EDGE_TYPES = { deletable: DeletableEdge };
+
+// Calls fitView() whenever `trigger` changes — must be a child of <ReactFlow>
+function FitOnSettle({ trigger }: { trigger: number }) {
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    if (trigger > 0) fitView({ padding: 0.2, duration: 400 });
+  }, [trigger, fitView]);
+  return null;
+}
 const NODE_RADIUS = 40;
 
 interface SimNode extends d3.SimulationNodeDatum {
@@ -53,6 +63,7 @@ function toFlowEdge(e: SpaceEdge, onDelete: (id: string) => void): Edge {
 export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdgeDelete, onNodeDelete, onNodeRename, onColorChange }: Props) {
   const [flowNodes, setFlowNodes] = useState<Node[]>([]);
   const [flowEdges, setFlowEdges] = useState<Edge[]>([]);
+  const [fitTrigger, setFitTrigger] = useState(0);
   const simRef = useRef<d3.Simulation<SimNode, undefined> | null>(null);
   const draggingRef = useRef<Set<string>>(new Set());
   // Track which nodes have been positioned by the simulation
@@ -97,6 +108,7 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdge
       })
       .on("end", () => {
         setFlowNodes(simNodes.map(n => buildFlowNode(n, nodes, draggingRef, onNodeDelete, onNodeRename, onColorChange)));
+        setFitTrigger(t => t + 1);
       });
 
     simRef.current = sim;
@@ -154,11 +166,11 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdge
       onNodeDragStop={onNodeDragStop}
       nodeTypes={NODE_TYPES}
       edgeTypes={EDGE_TYPES}
-      fitView
       minZoom={0.2}
       maxZoom={2}
       colorMode="dark"
     >
+      <FitOnSettle trigger={fitTrigger} />
       <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#2a2a2a" />
       <Controls showInteractive={false} />
       <MiniMap nodeColor={nodeColor} maskColor="rgba(0,0,0,0.6)" style={{ background: "#161616", border: "1px solid #2a2a2a" }} />
