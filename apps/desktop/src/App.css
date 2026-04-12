@@ -289,6 +289,52 @@
   color: var(--text-3);
 }
 
+/* ── Whiteboard view ────────────────────────────────── */
+.wb-shell {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.wb-panel {
+  background: var(--bg-1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.wb-panel-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.wb-canvas {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wb-excalidraw {
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Make Excalidraw fill its container */
+.wb-excalidraw .excalidraw {
+  width: 100%;
+  height: 100%;
+}
+
+.save-status {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.save-status.saving { color: var(--text-3); }
+.save-status.saved  { color: #22c55e; }
+
 /* ── Spaces view ────────────────────────────────────── */
 .spaces-shell {
   display: flex;
