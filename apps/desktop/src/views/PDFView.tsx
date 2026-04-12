@@ -18,23 +18,49 @@ type ExcalidrawAPI = any;
 const PAGE_WIDTH = 820;
 const PAGE_GAP = 20;
 const NOTE_COLORS = ["#fef08a", "#bbf7d0", "#bfdbfe", "#fecaca", "#e9d5ff", "#fed7aa"];
+const HIGHLIGHT_COLORS = ["#fef08a", "#bbf7d0", "#bfdbfe", "#fecaca", "#fed7aa"];
 const SAVE_DEBOUNCE = 1000;
 
-let db: Awaited<ReturnType<typeof Database.load>> | null = null;
-async function getDb() {
-  if (!db) {
-    db = await Database.load("sqlite:daemon.db");
-    await db.execute(`CREATE TABLE IF NOT EXISTS wb_notes (
-      id TEXT PRIMARY KEY, whiteboard_id TEXT NOT NULL,
-      content TEXT DEFAULT '', pos_x REAL DEFAULT 0, pos_y REAL DEFAULT 0,
-      color TEXT DEFAULT '#fef08a', created_at INTEGER
-    )`);
-    await db.execute(`CREATE TABLE IF NOT EXISTS wb_note_edges (
-      id TEXT PRIMARY KEY, whiteboard_id TEXT NOT NULL,
-      source_id TEXT NOT NULL, target_id TEXT NOT NULL
-    )`);
+interface HRect { x: number; y: number; width: number; height: number }
+
+interface PdfHighlight {
+  id: string;
+  rects: string; // JSON HRect[]
+  color: string;
+  selected_text: string;
+}
+
+interface SelToolbar {
+  screenX: number;
+  screenY: number;
+  rects: HRect[];
+  text: string;
+}
+
+// Promise-based singleton — avoids races and survives Vite HMR re-runs
+let dbPromise: Promise<Awaited<ReturnType<typeof Database.load>>> | null = null;
+function getDb() {
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      const database = await Database.load("sqlite:daemon.db");
+      await database.execute(`CREATE TABLE IF NOT EXISTS wb_notes (
+        id TEXT PRIMARY KEY, whiteboard_id TEXT NOT NULL,
+        content TEXT DEFAULT '', pos_x REAL DEFAULT 0, pos_y REAL DEFAULT 0,
+        color TEXT DEFAULT '#fef08a', created_at INTEGER
+      )`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS wb_note_edges (
+        id TEXT PRIMARY KEY, whiteboard_id TEXT NOT NULL,
+        source_id TEXT NOT NULL, target_id TEXT NOT NULL
+      )`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS pdf_highlights (
+        id TEXT PRIMARY KEY, node_id TEXT NOT NULL,
+        rects TEXT NOT NULL, color TEXT DEFAULT '#fef08a',
+        selected_text TEXT DEFAULT '', created_at INTEGER
+      )`);
+      return database;
+    })();
   }
-  return db;
+  return dbPromise;
 }
 
 interface Props {
@@ -50,6 +76,9 @@ export default function PDFView({ nodeId, filePath }: Props) {
   const [scroll, setScroll] = useState<ScrollState>({ scrollX: 20, scrollY: 20, zoom: 1 });
   const [wbNotes, setWbNotes] = useState<WbNote[]>([]);
   const [wbEdges, setWbEdges] = useState<WbNoteEdge[]>([]);
+  const [highlights, setHighlights] = useState<PdfHighlight[]>([]);
+  const [selToolbar, setSelToolbar] = useState<SelToolbar | null>(null);
+  const [highlightMode, setHighlightMode] = useState(false);
   const [ctx, setCtx] = useState<CtxState | null>(null);
   const [title, setTitle] = useState("");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -66,26 +95,25 @@ export default function PDFView({ nodeId, filePath }: Props) {
   const loadingRef = useRef(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const moveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const selToolbarRef = useRef<HTMLDivElement>(null);
+  // Holds the latest context-menu builder so the capture-phase listener (registered once)
+  // always sees current state without needing to re-register.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const showCtxRef = useRef<(clientX: number, clientY: number) => void>(() => {});
 
-  // Load PDF bytes via Rust command (bypasses frontend permission scope)
+  // Load PDF bytes via Rust command
   useEffect(() => {
     setPdfUrl(null);
     setPdfError(null);
-    console.log("[PDF] loading from path:", filePath);
     invoke<ArrayBuffer>("read_file_bytes", { path: filePath })
       .then(buf => {
-        console.log("[PDF] bytes received, byteLength:", buf?.byteLength);
-        // Revoke previous blob URL to avoid memory leaks
         if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
         const blob = new Blob([new Uint8Array(buf)], { type: "application/pdf" });
         const url = URL.createObjectURL(blob);
         pdfUrlRef.current = url;
         setPdfUrl(url);
       })
-      .catch(err => {
-        console.error("[PDF] read_file_bytes failed:", err);
-        setPdfError(String(err));
-      });
+      .catch(err => setPdfError(String(err)));
   }, [filePath]);
 
   // Cumulative Y positions for each page in canvas space
@@ -106,7 +134,6 @@ export default function PDFView({ nodeId, filePath }: Props) {
           const next = { scrollX: nx, scrollY: ny, zoom: nz };
           scrollRef.current = next;
           setScroll(next);
-          // Re-render PDF pages at new resolution after zoom settles (300ms debounce)
           if (nz !== renderZoomRef.current) {
             if (renderZoomTimerRef.current) clearTimeout(renderZoomTimerRef.current);
             renderZoomTimerRef.current = setTimeout(() => {
@@ -122,7 +149,7 @@ export default function PDFView({ nodeId, filePath }: Props) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Load annotation data + sticky notes
+  // Load annotation data, sticky notes, and highlights
   useEffect(() => {
     if (!apiRef.current) return;
     loadData();
@@ -131,7 +158,7 @@ export default function PDFView({ nodeId, filePath }: Props) {
 
   async function loadData() {
     const database = await getDb();
-    const [rows, notes, edges] = await Promise.all([
+    const [rows, notes, edges, hlRows] = await Promise.all([
       database.select<{ title: string; content: string | null }[]>(
         "SELECT title, content FROM space_nodes WHERE id = ?", [nodeId]
       ),
@@ -141,6 +168,10 @@ export default function PDFView({ nodeId, filePath }: Props) {
       ),
       database.select<WbNoteEdge[]>(
         "SELECT id, source_id, target_id FROM wb_note_edges WHERE whiteboard_id = ?",
+        [nodeId]
+      ),
+      database.select<PdfHighlight[]>(
+        "SELECT id, rects, color, selected_text FROM pdf_highlights WHERE node_id = ? ORDER BY created_at ASC",
         [nodeId]
       ),
     ]);
@@ -168,6 +199,7 @@ export default function PDFView({ nodeId, filePath }: Props) {
 
     setWbNotes(notes);
     setWbEdges(edges);
+    setHighlights(hlRows);
   }
 
   // Save Excalidraw annotation data to space_nodes.content
@@ -191,24 +223,21 @@ export default function PDFView({ nodeId, filePath }: Props) {
     if (!apiRef.current || pageYPositions.length <= i) return;
     const zoom = scrollRef.current.zoom;
     apiRef.current.updateScene({
-      appState: {
-        scrollX: 20,
-        scrollY: 20 - pageYPositions[i] * zoom,
-      },
+      appState: { scrollX: 20, scrollY: 20 - pageYPositions[i] * zoom },
     });
   }
 
-  // ── Sticky note handlers (mirrors WhiteboardView) ──────────────────────────
+  // ── Sticky note handlers ───────────────────────────────────────────────────
 
-  async function addNote(canvasX: number, canvasY: number) {
+  async function addNote(canvasX: number, canvasY: number, content = "") {
     const database = await getDb();
     const id = crypto.randomUUID();
     const color = NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)];
     await database.execute(
-      "INSERT INTO wb_notes (id, whiteboard_id, content, pos_x, pos_y, color, created_at) VALUES (?, ?, '', ?, ?, ?, ?)",
-      [id, nodeId, canvasX, canvasY, color, Date.now()]
+      "INSERT INTO wb_notes (id, whiteboard_id, content, pos_x, pos_y, color, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [id, nodeId, content, canvasX, canvasY, color, Date.now()]
     );
-    setWbNotes(prev => [...prev, { id, content: "", pos_x: canvasX, pos_y: canvasY, color }]);
+    setWbNotes(prev => [...prev, { id, content, pos_x: canvasX, pos_y: canvasY, color }]);
   }
 
   const handleNoteMove = useCallback(async (id: string, x: number, y: number) => {
@@ -258,20 +287,111 @@ export default function PDFView({ nodeId, filePath }: Props) {
     await database.execute("DELETE FROM wb_note_edges WHERE id = ?", [id]);
   }, []);
 
-  function onCanvasCtx(e: React.MouseEvent) {
-    e.preventDefault();
+  // ── Highlight handlers ─────────────────────────────────────────────────────
+
+  function onCanvasMouseUp(e: React.MouseEvent) {
+    if (!highlightMode) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      setSelToolbar(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const text = sel.toString().trim();
+    if (!text) { setSelToolbar(null); return; }
+
+    const clientRects = Array.from(range.getClientRects()).filter(r => r.width > 1 && r.height > 1);
+    if (clientRects.length === 0) { setSelToolbar(null); return; }
+
+    // scrollX/scrollY are relative to the canvas area container, not the viewport
+    const areaRect = canvasRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
     const s = scrollRef.current;
-    const canvasX = (e.clientX - s.scrollX) / s.zoom;
-    const canvasY = (e.clientY - s.scrollY) / s.zoom;
-    setCtx({
-      x: e.clientX, y: e.clientY,
-      items: [{ label: "Add Sticky Note", onClick: () => addNote(canvasX, canvasY) }],
+    const rects: HRect[] = clientRects.map(r => ({
+      x: (r.left - areaRect.left - s.scrollX) / s.zoom,
+      y: (r.top - areaRect.top - s.scrollY) / s.zoom,
+      width: r.width / s.zoom,
+      height: r.height / s.zoom,
+    }));
+
+    const bounding = range.getBoundingClientRect();
+    setSelToolbar({
+      screenX: bounding.left + bounding.width / 2,
+      screenY: bounding.top,
+      rects,
+      text,
     });
+    e.stopPropagation();
   }
 
-  // Transform that maps canvas-space PDF pages to screen-space.
-  // Pages are rendered at PAGE_WIDTH * renderZoom so we scale by zoom/renderZoom.
-  // This keeps pages crisp at rest while CSS handles interim zoom transitions.
+  async function createHighlight(color: string) {
+    if (!selToolbar) return;
+    const database = await getDb();
+    const id = crypto.randomUUID();
+    const rectsJson = JSON.stringify(selToolbar.rects);
+    await database.execute(
+      "INSERT INTO pdf_highlights (id, node_id, rects, color, selected_text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [id, nodeId, rectsJson, color, selToolbar.text, Date.now()]
+    );
+    setHighlights(prev => [...prev, { id, rects: rectsJson, color, selected_text: selToolbar.text }]);
+    window.getSelection()?.removeAllRanges();
+    setSelToolbar(null);
+  }
+
+  async function deleteHighlight(id: string) {
+    setHighlights(prev => prev.filter(h => h.id !== id));
+    const database = await getDb();
+    await database.execute("DELETE FROM pdf_highlights WHERE id = ?", [id]);
+  }
+
+  async function copyToNote() {
+    if (!selToolbar) return;
+    const r = selToolbar.rects[0];
+    await addNote(r.x, r.y + (selToolbar.rects[selToolbar.rects.length - 1].y - r.y) / 2, selToolbar.text);
+    window.getSelection()?.removeAllRanges();
+    setSelToolbar(null);
+  }
+
+  // ── Context menu ───────────────────────────────────────────────────────────
+  // Update ref on every render so the capture-phase listener always has fresh state.
+  showCtxRef.current = (clientX: number, clientY: number) => {
+    const areaRect = canvasRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const s = scrollRef.current;
+    const canvasX = (clientX - areaRect.left - s.scrollX) / s.zoom;
+    const canvasY = (clientY - areaRect.top - s.scrollY) / s.zoom;
+
+    const hitHighlight = highlights.find(h => {
+      const rects: HRect[] = JSON.parse(h.rects);
+      return rects.some(r =>
+        canvasX >= r.x && canvasX <= r.x + r.width &&
+        canvasY >= r.y && canvasY <= r.y + r.height
+      );
+    });
+
+    const items: CtxItem[] = [];
+    if (hitHighlight) {
+      const hlId = hitHighlight.id;
+      items.push({ label: "Delete highlight", onClick: () => deleteHighlight(hlId) });
+    }
+    items.push({ label: "Add Sticky Note", onClick: () => addNote(canvasX, canvasY) });
+    setCtx({ x: clientX, y: clientY, items });
+  };
+
+  // Capture-phase listener intercepts right-click before Excalidraw can stopPropagation.
+  // Registered once on mount; calls through showCtxRef so it always has current state.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const handler = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showCtxRef.current(e.clientX, e.clientY);
+    };
+    el.addEventListener("contextmenu", handler, true);
+    return () => el.removeEventListener("contextmenu", handler, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // PDF layer transform — pages rendered at renderZoom scale, CSS bridges the gap
   const pdfLayerStyle: React.CSSProperties = {
     transform: `translate(${scroll.scrollX}px, ${scroll.scrollY}px) scale(${scroll.zoom / renderZoom})`,
     transformOrigin: "0 0",
@@ -284,6 +404,13 @@ export default function PDFView({ nodeId, filePath }: Props) {
       <div className="pdf-nav-panel">
         <div className="pdf-nav-header">
           <span className="pdf-nav-title" title={title}>{title}</span>
+          <button
+            className={`pdf-mode-btn ${highlightMode ? "active" : ""}`}
+            title={highlightMode ? "Switch to draw mode" : "Switch to highlight mode"}
+            onClick={() => { setHighlightMode(m => !m); setSelToolbar(null); window.getSelection()?.removeAllRanges(); }}
+          >
+            {highlightMode ? "✏ Draw" : "🖊 Highlight"}
+          </button>
         </div>
         <div className="pdf-nav-thumbs">
           {!pdfUrl && <p className="pdf-nav-loading">Loading…</p>}
@@ -308,14 +435,19 @@ export default function PDFView({ nodeId, filePath }: Props) {
       </div>
 
       {/* ── Right: canvas ── */}
-      <div className="pdf-canvas-area" ref={canvasRef} onContextMenu={onCanvasCtx}>
-
-        {/* PDF pages — rendered behind Excalidraw in canvas coordinate space */}
+      <div
+        className={`pdf-canvas-area${highlightMode ? " pdf-highlight-mode" : ""}`}
+        ref={canvasRef}
+        onMouseUp={onCanvasMouseUp}
+        onMouseDown={() => setSelToolbar(null)}
+      >
         {pdfError && (
           <div style={{ position: "absolute", top: 20, left: 20, color: "#ef4444", fontSize: "0.85rem", zIndex: 10 }}>
             Failed to load PDF: {pdfError}
           </div>
         )}
+
+        {/* PDF pages + highlight rects — behind Excalidraw */}
         <div className="pdf-pages-layer" style={pdfLayerStyle}>
           {pdfUrl && <Document
             file={pdfUrl}
@@ -324,14 +456,13 @@ export default function PDFView({ nodeId, filePath }: Props) {
             error={<div className="pdf-load-error">Failed to load PDF</div>}
           >
             {Array.from({ length: numPages }, (_, i) => (
-              <div key={i} style={{ marginBottom: PAGE_GAP * renderZoom }}>
+              <div key={i} style={{ marginBottom: PAGE_GAP * renderZoom, position: "relative" }}>
                 <Page
                   pageNumber={i + 1}
                   width={PAGE_WIDTH * renderZoom}
-                  renderTextLayer={false}
+                  renderTextLayer={true}
                   renderAnnotationLayer={false}
                   onLoadSuccess={page => {
-                    // Store canvas-space heights (zoom=1) for scroll math
                     const h = Math.round(PAGE_WIDTH * (page.originalHeight / page.originalWidth));
                     setPageHeights(prev => {
                       const next = [...prev];
@@ -343,10 +474,45 @@ export default function PDFView({ nodeId, filePath }: Props) {
               </div>
             ))}
           </Document>}
+
+          {/* Highlight rects — absolutely positioned in render-space coords */}
+          <div style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}>
+            {highlights.map(h => {
+              const rects: HRect[] = JSON.parse(h.rects);
+              return rects.map((r, i) => (
+                <div
+                  key={`${h.id}-${i}`}
+                  style={{
+                    position: "absolute",
+                    left: r.x * renderZoom,
+                    top: r.y * renderZoom,
+                    width: r.width * renderZoom,
+                    height: r.height * renderZoom,
+                    background: h.color,
+                    opacity: 0.45,
+                    mixBlendMode: "multiply",
+                    pointerEvents: "auto",
+                    cursor: "default",
+                  }}
+                  onContextMenu={e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setCtx({
+                      x: e.clientX, y: e.clientY,
+                      items: [{ label: "Delete highlight", onClick: () => deleteHighlight(h.id) }],
+                    });
+                  }}
+                />
+              ));
+            })}
+          </div>
         </div>
 
         {/* Excalidraw + sticky note overlay */}
-        <div className="pdf-excalidraw-wrap">
+        <div
+          className="pdf-excalidraw-wrap"
+          style={highlightMode ? { pointerEvents: "none" } : undefined}
+        >
           <Excalidraw
             excalidrawAPI={api => {
               apiRef.current = api;
@@ -376,9 +542,37 @@ export default function PDFView({ nodeId, filePath }: Props) {
             onEdgeDelete={handleEdgeDelete}
           />
         </div>
+
+        {/* Selection toolbar — fixed screen coords, stops propagation so mousedown doesn't clear it */}
+        {selToolbar && (
+          <div
+            ref={selToolbarRef}
+            className="pdf-sel-toolbar"
+            style={{ left: selToolbar.screenX, top: selToolbar.screenY }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <div className="pdf-sel-colors">
+              {HIGHLIGHT_COLORS.map(color => (
+                <button
+                  key={color}
+                  className="pdf-sel-swatch"
+                  style={{ background: color }}
+                  title="Highlight"
+                  onClick={() => createHighlight(color)}
+                />
+              ))}
+            </div>
+            <button className="pdf-sel-copy-btn" onClick={copyToNote}>
+              Copy to note
+            </button>
+          </div>
+        )}
       </div>
 
-      {ctx && <ContextMenu {...ctx} onClose={() => setCtx(null)} />}
+      {ctx && <>
+        <div style={{ position: "fixed", inset: 0, zIndex: 9998 }} onClick={() => setCtx(null)} />
+        <ContextMenu {...ctx} onClose={() => setCtx(null)} />
+      </>}
     </div>
   );
 }
