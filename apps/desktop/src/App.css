@@ -612,6 +612,115 @@
 .lna-btn:hover { color: var(--text-1); background: #333; }
 .lna-btn.danger:hover { color: #ef4444; }
 
+/* ── Circle Node (graph) ────────────────────────────── */
+.circle-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  cursor: grab;
+}
+
+.circle-node:active { cursor: grabbing; }
+
+.circle-node-inner {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--node-color) 18%, var(--bg-2));
+  border: 2px solid var(--node-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 16px color-mix(in srgb, var(--node-color) 30%, transparent);
+  transition: box-shadow 0.2s, border-color 0.2s;
+}
+
+.circle-node:hover .circle-node-inner {
+  box-shadow: 0 0 28px color-mix(in srgb, var(--node-color) 55%, transparent);
+}
+
+.circle-node-initials {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--node-color);
+  letter-spacing: -0.02em;
+  user-select: none;
+}
+
+.circle-node-label {
+  font-size: 0.72rem;
+  color: var(--text-2);
+  max-width: 100px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+.circle-node-delete {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.circle-node:hover .circle-node-delete { opacity: 1; }
+.circle-node-delete:hover { color: #ef4444; border-color: #ef4444; }
+
+/* Override react-flow handle visibility */
+.circle-node .react-flow__handle {
+  width: 10px !important;
+  height: 10px !important;
+  background: var(--node-color) !important;
+  border: 2px solid var(--bg-1) !important;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.circle-node:hover .react-flow__handle { opacity: 1 !important; }
+
+/* ── Deletable Edge ──────────────────────────────────── */
+.edge-delete-btn {
+  position: absolute;
+  pointer-events: all;
+}
+
+.edge-delete-inner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 0.8rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.react-flow__edge:hover .edge-delete-inner,
+.react-flow__edge.selected .edge-delete-inner { opacity: 1; }
+.edge-delete-inner:hover { color: #ef4444; border-color: #ef4444; }
+
 /* ── Unified Node Card ──────────────────────────────── */
 .node-card {
   background: var(--bg-2);

@@ -298,6 +298,12 @@ export default function SpacesView() {
     setNodes(prev => prev.map(n => n.id === id ? { ...n, title } : n));
   }, []);
 
+  const handleEdgeDelete = useCallback(async (id: string) => {
+    const db = await getDb();
+    await db.execute("DELETE FROM space_edges WHERE id = ?", [id]);
+    setEdges(prev => prev.filter(e => e.id !== id));
+  }, []);
+
   const handleNodeDelete = useCallback(async (id: string) => {
     const db = await getDb();
     await db.execute("DELETE FROM space_nodes WHERE id = ?", [id]);
@@ -405,6 +411,7 @@ export default function SpacesView() {
                 edges={edges}
                 onNodeMove={handleNodeMove}
                 onEdgeAdd={handleEdgeAdd}
+                onEdgeDelete={handleEdgeDelete}
                 onNodeRename={handleNodeRename}
                 onNodeDelete={handleNodeDelete}
               />
