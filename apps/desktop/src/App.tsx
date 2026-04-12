@@ -1,23 +1,23 @@
 import { useState } from "react";
-import { CheckSquare, Pencil, FolderOpen, ChevronLeft, ChevronRight } from "lucide-react";
+import { CheckSquare, Pencil, Boxes, ChevronLeft, ChevronRight } from "lucide-react";
 import TodoView from "./views/TodoView";
 import WhiteboardView from "./views/WhiteboardView";
-import FoldersView from "./views/FoldersView";
+import SpacesView from "./views/SpacesView";
 import "./App.css";
 
-type View = "todo" | "whiteboard" | "folders";
+type View = "todo" | "whiteboard" | "spaces";
 
 const NAV_ITEMS: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: "todo",       label: "Todo",       icon: <CheckSquare size={18} /> },
   { id: "whiteboard", label: "Whiteboard", icon: <Pencil size={18} /> },
-  { id: "folders",    label: "Folders",    icon: <FolderOpen size={18} /> },
+  { id: "spaces",     label: "Spaces",     icon: <Boxes size={18} /> },
 ];
 
 function renderView(view: View) {
   switch (view) {
     case "todo":       return <TodoView />;
     case "whiteboard": return <WhiteboardView />;
-    case "folders":    return <FoldersView />;
+    case "spaces":     return <SpacesView />;
   }
 }
 

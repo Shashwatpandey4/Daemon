@@ -1,0 +1,281 @@
+import { useEffect, useState, useCallback, useRef } from "react";
+import Database from "@tauri-apps/plugin-sql";
+import { Plus, Trash2, Link2 } from "lucide-react";
+import SpaceGraph from "../components/SpaceGraph";
+
+export interface Space {
+  id: string;
+  name: string;
+  created_at: number;
+}
+
+export interface SpaceNode {
+  id: string;
+  space_id: string;
+  title: string;
+  url: string;
+  pos_x: number;
+  pos_y: number;
+  created_at: number;
+}
+
+export interface SpaceEdge {
+  id: string;
+  space_id: string;
+  source: string;
+  target: string;
+}
+
+let db: Awaited<ReturnType<typeof Database.load>> | null = null;
+
+async function getDb() {
+  if (!db) {
+    db = await Database.load("sqlite:daemon.db");
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS spaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS space_nodes (
+        id TEXT PRIMARY KEY,
+        space_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT NOT NULL,
+        pos_x REAL NOT NULL DEFAULT 100,
+        pos_y REAL NOT NULL DEFAULT 100,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS space_edges (
+        id TEXT PRIMARY KEY,
+        space_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        target TEXT NOT NULL
+      )
+    `);
+  }
+  return db;
+}
+
+function extractTitle(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ""); }
+  catch { return url; }
+}
+
+export default function SpacesView() {
+  const [spaces, setSpaces] = useState<Space[]>([]);
+  const [activeSpace, setActiveSpace] = useState<string | null>(null);
+  const [nodes, setNodes] = useState<SpaceNode[]>([]);
+  const [edges, setEdges] = useState<SpaceEdge[]>([]);
+  const [newSpaceName, setNewSpaceName] = useState("");
+  const [showAddLink, setShowAddLink] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+  const [linkTitle, setLinkTitle] = useState("");
+  const linkUrlRef = useRef<HTMLInputElement>(null);
+
+  async function loadSpaces() {
+    const db = await getDb();
+    const rows = await db.select<Space[]>("SELECT * FROM spaces ORDER BY created_at ASC");
+    setSpaces(rows);
+    if (rows.length > 0 && !activeSpace) setActiveSpace(rows[0].id);
+  }
+
+  async function loadGraph(spaceId: string) {
+    const db = await getDb();
+    const [n, e] = await Promise.all([
+      db.select<SpaceNode[]>("SELECT * FROM space_nodes WHERE space_id = ? ORDER BY created_at ASC", [spaceId]),
+      db.select<SpaceEdge[]>("SELECT * FROM space_edges WHERE space_id = ?", [spaceId]),
+    ]);
+    setNodes(n);
+    setEdges(e);
+  }
+
+  useEffect(() => { loadSpaces(); }, []);
+  useEffect(() => { if (activeSpace) loadGraph(activeSpace); }, [activeSpace]);
+
+  async function addSpace() {
+    const name = newSpaceName.trim();
+    if (!name) return;
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    await db.execute("INSERT INTO spaces (id, name, created_at) VALUES (?, ?, ?)", [id, name, Date.now()]);
+    setNewSpaceName("");
+    await loadSpaces();
+    setActiveSpace(id);
+  }
+
+  async function deleteSpace(id: string) {
+    const db = await getDb();
+    await db.execute("DELETE FROM spaces WHERE id = ?", [id]);
+    await db.execute("DELETE FROM space_nodes WHERE space_id = ?", [id]);
+    await db.execute("DELETE FROM space_edges WHERE space_id = ?", [id]);
+    const remaining = spaces.filter(s => s.id !== id);
+    setSpaces(remaining);
+    setActiveSpace(remaining[0]?.id ?? null);
+  }
+
+  function openAddLink() {
+    setLinkUrl("");
+    setLinkTitle("");
+    setShowAddLink(true);
+    setTimeout(() => linkUrlRef.current?.focus(), 50);
+  }
+
+  async function addLink() {
+    const url = linkUrl.trim();
+    if (!url || !activeSpace) return;
+    const title = linkTitle.trim() || extractTitle(url);
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    // Stagger new nodes so they don't pile up
+    const offsetX = 80 + (nodes.length % 5) * 220;
+    const offsetY = 80 + Math.floor(nodes.length / 5) * 140;
+    await db.execute(
+      "INSERT INTO space_nodes (id, space_id, title, url, pos_x, pos_y, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [id, activeSpace, title, url, offsetX, offsetY, Date.now()]
+    );
+    setLinkUrl("");
+    setLinkTitle("");
+    setShowAddLink(false);
+    loadGraph(activeSpace);
+  }
+
+  const handleNodeMove = useCallback(async (id: string, x: number, y: number) => {
+    const db = await getDb();
+    await db.execute("UPDATE space_nodes SET pos_x = ?, pos_y = ? WHERE id = ?", [x, y, id]);
+  }, []);
+
+  const handleEdgeAdd = useCallback(async (source: string, target: string) => {
+    if (!activeSpace) return;
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    await db.execute(
+      "INSERT INTO space_edges (id, space_id, source, target) VALUES (?, ?, ?, ?)",
+      [id, activeSpace, source, target]
+    );
+    setEdges(prev => [...prev, { id, space_id: activeSpace, source, target }]);
+  }, [activeSpace]);
+
+  const handleNodeRename = useCallback(async (id: string, title: string) => {
+    const db = await getDb();
+    await db.execute("UPDATE space_nodes SET title = ? WHERE id = ?", [title, id]);
+    setNodes(prev => prev.map(n => n.id === id ? { ...n, title } : n));
+  }, []);
+
+  const handleNodeDelete = useCallback(async (id: string) => {
+    const db = await getDb();
+    await db.execute("DELETE FROM space_nodes WHERE id = ?", [id]);
+    await db.execute("DELETE FROM space_edges WHERE source = ? OR target = ?", [id, id]);
+    setNodes(prev => prev.filter(n => n.id !== id));
+    setEdges(prev => prev.filter(e => e.source !== id && e.target !== id));
+  }, []);
+
+  const active = spaces.find(s => s.id === activeSpace);
+
+  return (
+    <div className="spaces-shell">
+      {/* Left panel */}
+      <div className="spaces-panel">
+        <div className="spaces-panel-header">
+          <span className="spaces-panel-title">Spaces</span>
+        </div>
+
+        <ul className="spaces-list">
+          {spaces.map(s => (
+            <li
+              key={s.id}
+              className={`space-item ${s.id === activeSpace ? "active" : ""}`}
+              onClick={() => setActiveSpace(s.id)}
+            >
+              <span className="space-dot" />
+              <span className="space-name">{s.name}</span>
+              <button
+                className="space-delete"
+                onClick={e => { e.stopPropagation(); deleteSpace(s.id); }}
+                title="Delete space"
+              >
+                <Trash2 size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <div className="spaces-new">
+          <input
+            className="spaces-new-input"
+            placeholder="New space…"
+            value={newSpaceName}
+            onChange={e => setNewSpaceName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addSpace()}
+          />
+          <button className="spaces-new-btn" onClick={addSpace} title="Add space">
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* Graph canvas */}
+      <div className="spaces-graph">
+        {!activeSpace ? (
+          <div className="placeholder-view">
+            <Link2 size={40} strokeWidth={1} />
+            <p>Create a space to get started</p>
+          </div>
+        ) : (
+          <>
+            <div className="graph-toolbar">
+              <span className="graph-title">{active?.name}</span>
+              <button className="btn-primary icon-btn" onClick={openAddLink}>
+                <Plus size={14} />
+                <span>Add link</span>
+              </button>
+            </div>
+
+            <div className="graph-canvas">
+              <SpaceGraph
+                nodes={nodes}
+                edges={edges}
+                onNodeMove={handleNodeMove}
+                onEdgeAdd={handleEdgeAdd}
+                onNodeRename={handleNodeRename}
+                onNodeDelete={handleNodeDelete}
+              />
+            </div>
+
+            {/* Add link modal */}
+            {showAddLink && (
+              <div className="modal-backdrop" onClick={() => setShowAddLink(false)}>
+                <div className="modal" onClick={e => e.stopPropagation()}>
+                  <h3 className="modal-title">Add link</h3>
+                  <input
+                    ref={linkUrlRef}
+                    className="modal-input"
+                    placeholder="https://..."
+                    value={linkUrl}
+                    onChange={e => setLinkUrl(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addLink()}
+                  />
+                  <input
+                    className="modal-input"
+                    placeholder="Title (optional)"
+                    value={linkTitle}
+                    onChange={e => setLinkTitle(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addLink()}
+                  />
+                  <div className="modal-actions">
+                    <button className="btn-ghost" onClick={() => setShowAddLink(false)}>Cancel</button>
+                    <button className="btn-primary" onClick={addLink}>Add</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -11,7 +12,16 @@ import {
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import * as SQLite from "expo-sqlite";
-import type { Todo } from "@daemon/shared";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+interface Todo {
+  id: string;
+  title: string;
+  completed: boolean;
+  created_at: number;
+  updated_at: number;
+  deleted: boolean;
+}
 
 let db: SQLite.SQLiteDatabase | null = null;
 
@@ -39,19 +49,47 @@ function uuid() {
   });
 }
 
+async function loadAllTodos(): Promise<Todo[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<Todo>(
+    "SELECT * FROM todos WHERE deleted = 0 ORDER BY created_at ASC"
+  );
+  return rows.map(r => ({ ...r, completed: !!r.completed, deleted: !!r.deleted }));
+}
+
+async function upsertTodos(todos: Todo[]) {
+  const db = await getDb();
+  for (const t of todos) {
+    await db.runAsync(
+      `INSERT INTO todos (id, title, completed, created_at, updated_at, deleted)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = CASE WHEN excluded.updated_at > todos.updated_at THEN excluded.title ELSE todos.title END,
+         completed = CASE WHEN excluded.updated_at > todos.updated_at THEN excluded.completed ELSE todos.completed END,
+         updated_at = MAX(todos.updated_at, excluded.updated_at),
+         deleted = CASE WHEN excluded.updated_at > todos.updated_at THEN excluded.deleted ELSE todos.deleted END`,
+      [t.id, t.title, t.completed ? 1 : 0, t.created_at, t.updated_at, t.deleted ? 1 : 0]
+    );
+  }
+}
+
+const IP_STORAGE_KEY = "daemon_desktop_ip";
+
 export default function App() {
   const [todos, setTodos] = useState<Todo[]>([]);
   const [input, setInput] = useState("");
+  const [desktopIp, setDesktopIp] = useState("");
+  const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "ok" | "error">("idle");
+  const [syncError, setSyncError] = useState("");
 
   async function load() {
-    const db = await getDb();
-    const rows = await db.getAllAsync<Todo>(
-      "SELECT * FROM todos WHERE deleted = 0 ORDER BY created_at ASC"
-    );
-    setTodos(rows.map(r => ({ ...r, completed: !!r.completed, deleted: !!r.deleted })));
+    setTodos(await loadAllTodos());
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    AsyncStorage.getItem(IP_STORAGE_KEY).then(v => { if (v) setDesktopIp(v); });
+  }, []);
 
   async function addTodo() {
     if (!input.trim()) return;
@@ -91,6 +129,56 @@ export default function App() {
     load();
   }
 
+  async function syncWithDesktop() {
+    const ip = desktopIp.trim();
+    if (!ip) return;
+
+    await AsyncStorage.setItem(IP_STORAGE_KEY, ip);
+    setSyncStatus("syncing");
+
+    try {
+      const db = await getDb();
+      const allTodos = await db.getAllAsync<Todo>("SELECT * FROM todos");
+      const normalised = allTodos.map(r => ({ ...r, completed: !!r.completed, deleted: !!r.deleted }));
+
+      const res = await fetch(`http://${ip}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(normalised),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const merged: Todo[] = await res.json();
+      await upsertTodos(merged);
+      await load();
+
+      setSyncStatus("ok");
+      setSyncError("");
+      setTimeout(() => setSyncStatus("idle"), 2000);
+    } catch (e: any) {
+      const msg = e?.message ?? String(e);
+      console.error("sync failed", msg);
+      setSyncStatus("error");
+      setSyncError(msg);
+      setTimeout(() => { setSyncStatus("idle"); setSyncError(""); }, 6000);
+    }
+  }
+
+  const syncLabel = {
+    idle: "Sync",
+    syncing: "Syncing…",
+    ok: "Synced!",
+    error: "Failed",
+  }[syncStatus];
+
+  const syncColor = {
+    idle: "#3b82f6",
+    syncing: "#555",
+    ok: "#22c55e",
+    error: "#ef4444",
+  }[syncStatus];
+
   return (
     <KeyboardAvoidingView
       style={styles.root}
@@ -99,6 +187,33 @@ export default function App() {
       <StatusBar style="light" />
       <View style={styles.container}>
         <Text style={styles.heading}>Daemon</Text>
+
+        {/* Sync row */}
+        <View style={styles.syncRow}>
+          <TextInput
+            style={styles.syncInput}
+            value={desktopIp}
+            onChangeText={setDesktopIp}
+            placeholder="192.168.x.x:9001"
+            placeholderTextColor="#555"
+            autoCapitalize="none"
+            keyboardType="url"
+          />
+          <Pressable
+            style={[styles.syncBtn, { backgroundColor: syncColor }]}
+            onPress={syncWithDesktop}
+            disabled={syncStatus === "syncing"}
+          >
+            {syncStatus === "syncing"
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={styles.syncBtnText}>{syncLabel}</Text>
+            }
+          </Pressable>
+        </View>
+
+        {syncError ? <Text style={styles.syncErr}>{syncError}</Text> : null}
+
+        {/* Todo input */}
         <View style={styles.inputRow}>
           <TextInput
             style={styles.input}
@@ -113,6 +228,7 @@ export default function App() {
             <Text style={styles.addBtnText}>Add</Text>
           </Pressable>
         </View>
+
         <FlatList
           data={todos}
           keyExtractor={item => item.id}
@@ -138,7 +254,28 @@ export default function App() {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#0f0f0f" },
   container: { flex: 1, paddingTop: 60, paddingHorizontal: 20 },
-  heading: { fontSize: 32, fontWeight: "700", color: "#fff", marginBottom: 24 },
+  heading: { fontSize: 32, fontWeight: "700", color: "#fff", marginBottom: 16 },
+  syncRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  syncInput: {
+    flex: 1,
+    backgroundColor: "#1a1a1a",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#333",
+    color: "#e0e0e0",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13,
+    fontFamily: "monospace",
+  },
+  syncBtn: {
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    justifyContent: "center",
+    minWidth: 72,
+    alignItems: "center",
+  },
+  syncBtnText: { color: "#fff", fontWeight: "600", fontSize: 14 },
   inputRow: { flexDirection: "row", gap: 8, marginBottom: 20 },
   input: {
     flex: 1,
@@ -177,4 +314,5 @@ const styles = StyleSheet.create({
   done: { textDecorationLine: "line-through", color: "#666" },
   del: { color: "#555", fontSize: 14 },
   empty: { color: "#555", textAlign: "center", marginTop: 40 },
+  syncErr: { color: "#ef4444", fontSize: 12, marginBottom: 8 },
 });
