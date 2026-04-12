@@ -81,20 +81,28 @@ export default function WhiteboardView() {
     setTimeout(() => { loadingRef.current = false; }, 100);
   }, [activeId]);
 
+  const saveStatusRef = useRef<"" | "saving" | "saved">("");
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const onChange = useCallback((elements: any, appState: any, files: any) => {
     if (loadingRef.current) return;
     const id = activeIdRef.current;
     if (!id) return;
 
-    setSaveStatus("saving");
+    // Only update UI state when status actually changes — avoids re-render on every stroke
+    if (saveStatusRef.current !== "saving") {
+      saveStatusRef.current = "saving";
+      setSaveStatus("saving");
+    }
+
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       const data = JSON.stringify({ elements, appState: { ...appState, collaborators: undefined }, files });
       const db = await getDb();
       await db.execute("UPDATE whiteboards SET data = ? WHERE id = ?", [data, id]);
+      saveStatusRef.current = "saved";
       setSaveStatus("saved");
-      setTimeout(() => setSaveStatus(""), 2000);
+      setTimeout(() => { saveStatusRef.current = ""; setSaveStatus(""); }, 2000);
     }, SAVE_DEBOUNCE);
   }, []);
 
