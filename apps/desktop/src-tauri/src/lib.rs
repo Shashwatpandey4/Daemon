@@ -71,15 +71,7 @@ fn scan_space_folder(folder_path: String) -> Result<Vec<String>, String> {
 /// Reads a file from disk and returns raw bytes over the binary IPC channel.
 #[tauri::command]
 fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
-    println!("[PDF] read_file_bytes called: {}", path);
-    let exists = std::path::Path::new(&path).exists();
-    println!("[PDF] file exists: {}", exists);
-    let bytes = std::fs::read(&path).map_err(|e| {
-        let msg = format!("Cannot read '{}': {}", path, e);
-        eprintln!("[PDF] ERROR: {}", msg);
-        msg
-    })?;
-    println!("[PDF] read {} bytes OK", bytes.len());
+    let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read '{}': {}", path, e))?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -146,11 +138,6 @@ pub fn run() {
                 .join("daemon.db");
 
             sync::advertise_and_serve(db_path);
-
-            {
-                let window = app.get_webview_window("main").unwrap();
-                window.open_devtools();
-            }
 
             Ok(())
         })
