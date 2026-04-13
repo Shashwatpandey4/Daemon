@@ -6,24 +6,40 @@ A local-first personal productivity and knowledge management app. Built with Tau
 
 ## What it does today
 
-### Sidebar (VS Code-style Explorer)
-A single resizable sidebar with three collapsible sections. Right-click anywhere for context menus — no toolbar buttons cluttering the UI.
+### Sidebar (VS Code-style)
+Activity bar (56px) with icons for Todo, Boards, and Spaces. Clicking an icon opens an explorer panel — same pattern as VS Code. Each panel has a `+` header button and a right-click context menu. Panel is resizable.
 
 ### Todo
-Inline task list in the sidebar. Right-click to add, complete, or delete tasks. Persisted locally in SQLite.
+Inline task list. Add tasks via `+` button or right-click. Pending count shown as a dot on the activity bar icon.
 
 ### Whiteboards
-Full Excalidraw canvas for free-form drawing and diagramming. Supports multiple boards, auto-saves as you draw.
+Full Excalidraw canvas for free-form drawing and diagramming. Multiple boards, auto-saves as you draw.
 
-**Sticky note graph layer** — on top of any drawing you can place sticky notes, connect them to each other with bezier lines, and build a mini knowledge graph over your diagram. Notes are draggable, editable, and persisted independently from the drawing.
+**Sticky note graph layer** — draggable sticky notes with bezier connections on top of any drawing. Notes persist independently from the drawing.
 
 ### Spaces
-Knowledge graph view. Each space is a folder-like container. Inside it:
-- **Nodes** — notes, links, or imported files (PDFs, images, docs)
-- **Graph canvas** — d3-force directed layout, auto-arranges nodes, drag to reposition
-- **Connections** — draw edges between any two nodes; delete edges inline
-- **Node styling** — 12-color palette per node, color-coded by type or tag
-- **VS Code tree** — sidebar shows spaces → nodes in a nested collapsible tree
+Knowledge graph view. Each space maps to a `~/Daemon/<name>/` folder.
+- **Nodes** — notes, links, docs, or imported files (PDFs, images, docs)
+- **Graph canvas** — d3-force directed layout, drag to reposition
+- **Connections** — draw edges between nodes, delete inline
+- **Node styling** — 12-color palette, color-coded by type
+- **Tree view** — sidebar shows spaces → nodes in a collapsible tree
+
+### Note Editor (Docs)
+Obsidian-style centered markdown editor (TipTap). Opens when you click a doc node in a space. Auto-saves with 800ms debounce.
+
+### PDF Reader
+In-app PDF reading with full annotation support:
+- Pages stacked vertically on a canvas with Excalidraw annotation layer on top
+- **Text highlighting** — 5 colors, persisted per document
+- **Copy to note** — turn any highlight into a sticky note
+- **Sticky notes** — same graph layer as whiteboards
+- **Zoom-crisp rendering** — pages re-render at display resolution after zoom settles
+- **Nav panel** — page thumbnails for jumping to any page
+- **Draw / Highlight mode toggle** in the nav panel
+
+### Global Search
+`Ctrl+K` opens a search modal across all todos, space nodes, boards, and whiteboard notes.
 
 ---
 
@@ -34,9 +50,11 @@ Knowledge graph view. Each space is a folder-like container. Inside it:
 | Desktop shell | Tauri v2 (Rust) |
 | Frontend | React 19 + TypeScript + Vite |
 | Mobile | Expo (React Native) |
-| Database | SQLite via `@tauri-apps/plugin-sql` (desktop) / `expo-sqlite` (mobile) |
+| Database | SQLite via `@tauri-apps/plugin-sql` |
 | Graph | `@xyflow/react` + `d3-force` |
 | Whiteboard | `@excalidraw/excalidraw` |
+| Note editor | TipTap + tiptap-markdown |
+| PDF | react-pdf (PDF.js) |
 | Monorepo | pnpm workspaces |
 
 ---
@@ -48,7 +66,8 @@ Knowledge graph view. Each space is a folder-like container. Inside it:
 pnpm install
 
 # Desktop (Tauri dev server)
-pnpm --filter desktop tauri dev
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 \
+  pnpm --filter desktop tauri dev
 
 # Mobile (Expo)
 cd apps/mobile && npx expo start
@@ -60,40 +79,34 @@ cd apps/mobile && npx expo start
 
 ## Roadmap
 
-### 1. Global Search
-`Ctrl+K` quick-search across everything — todos, space nodes, whiteboard notes, board names. Results open the relevant item directly in the main canvas.
+### 1. Backlinks between notes
+`[[note name]]` syntax in the editor that auto-creates graph edges. Clicking a backlink navigates to the referenced note. A backlinks panel shows every note that references the current one — builds a real second brain over time.
 
-### 2. AI Integration
-- Summarize a space or whiteboard in one click
-- Auto-suggest connections between nodes ("these two notes seem related")
-- Auto-tag nodes based on content
-- Chat interface: "what did I write about X?" queries across all your notes
+### 2. Daily notes / Journal
+A dedicated section that opens today's note automatically on launch. Quick scratchpad for raw thoughts, learnings, and links throughout the day. Daily notes appear as nodes in the global graph and can be linked to any space.
 
-### 3. Markdown Note Editor
-A full-screen rich markdown editor as a fourth sidebar section. Clicking a note node in a space opens it as a proper editor in the main area — not just a text field in the graph. Supports headings, code blocks, tables, and inline images.
+### 3. Code blocks with syntax highlighting
+TipTap `CodeBlockLowlight` extension — proper syntax highlighting for code snippets inside notes. Critical for an engineering workflow: pseudocode, system diagrams, algorithm sketches, config snippets.
 
-### 4. LAN Sync (Desktop ↔ Mobile)
-Sync over your local WiFi network — no cloud involved. The Rust backend (`sync.rs`) already has the skeleton. Completing this lets your phone and laptop stay in sync automatically when on the same network.
+### 4. Spaced repetition from highlights
+Turn PDF highlights into a review deck. A "Review" mode cycles through highlights using SM-2 scheduling. Track retention over time. Directly useful for grinding through research papers.
 
-### 5. Due Dates + Calendar View
-Add optional due dates to todos. A calendar view in the main area shows tasks on their due dates, lets you drag-reschedule, and highlights overdue items. Integrates with the existing todo section in the sidebar.
+### 5. Web / arXiv import
+Paste a URL or arXiv ID → auto-fetch title, abstract, and PDF → create a space node and download the paper. Removes friction from paper ingestion and links the PDF to its metadata node in the graph.
 
-### 6. Global Graph View
-A "big picture" canvas that renders all spaces and their nodes together in one force-directed graph. Edges can span across spaces. Useful for spotting unexpected connections across your entire knowledge base.
+### 6. AI chat over notes and PDFs
+Wire the Anthropic API into a sidebar chat panel. Ask questions against your highlighted text, get summaries, generate flashcards, surface connections between notes. Context is built from the current document or space. The biggest productivity multiplier for learning.
 
-### 7. Export
-- **Spaces** → export as a folder of Markdown files (one file per node, with frontmatter tags)
-- **Whiteboards** → export as PNG or PDF
-- **Todos** → export as plain text or CSV
+### 7. Global graph view
+A single canvas that renders all spaces and nodes together. Cross-space edges from backlinks and shared tags form naturally. Useful for spotting unexpected connections across your entire knowledge base once it reaches 50+ nodes.
 
-### 8. Paper Reader
-A dedicated PDF reading experience built inside Spaces. Opening a PDF node splits the main area: PDF reader on the left, knowledge graph on the right.
+### 8. LAN sync (Desktop ↔ Mobile)
+Sync over local WiFi — no cloud. The Rust backend (`sync.rs`) already has the mDNS + WebSocket skeleton. Completing this keeps phone and laptop in sync on the same network.
 
-- Highlight any text in the PDF → automatically creates a linked sticky note node in the graph
-- Annotate directly on the PDF with drawings (uses the whiteboard layer)
-- Connect highlights to concept nodes, other papers, or external links
-- Multiple papers in one space build a comparison graph automatically
-- Page references are preserved on each node so you can jump back to the source
+### 9. Export
+- **Spaces** → folder of Markdown files with frontmatter tags
+- **Whiteboards** → PNG or PDF
+- **Todos** → plain text or CSV
 
 ---
 
@@ -103,9 +116,9 @@ A dedicated PDF reading experience built inside Spaces. Opening a PDF node split
 Daemon/
 ├── apps/
 │   ├── desktop/          # Tauri app
-│   │   ├── src/          # React frontend
-│   │   │   ├── components/   # Sidebar, SpaceGraph, CircleNode, WbNoteOverlay, ContextMenu…
-│   │   │   └── views/        # WhiteboardView, SpacesView, TodoView
+│   │   ├── src/
+│   │   │   ├── components/   # Sidebar, SpaceGraph, CircleNode, WbNoteOverlay, ContextMenu, SearchModal
+│   │   │   └── views/        # WhiteboardView, SpacesView, NoteView, PDFView
 │   │   └── src-tauri/    # Rust backend (commands, sync, capabilities)
 │   └── mobile/           # Expo app
 └── packages/

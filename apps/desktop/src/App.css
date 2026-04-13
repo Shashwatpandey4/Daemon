@@ -30,8 +30,61 @@
   background: var(--bg-0);
 }
 
-/* ── Sidebar ────────────────────────────────────────── */
-.sidebar {
+/* ── Activity bar ───────────────────────────────────── */
+.activity-bar {
+  width: 56px;
+  flex-shrink: 0;
+  background: var(--bg-1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 4px;
+  user-select: none;
+}
+
+.ab-btn {
+  position: relative;
+  width: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-2);
+  transition: background 0.15s, color 0.15s;
+}
+.ab-btn:hover { background: var(--bg-3); color: var(--text-1); }
+.ab-btn.active {
+  color: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+.ab-label {
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Pending-task dot indicator */
+.ab-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ── Explorer panel ─────────────────────────────────── */
+.explorer-panel {
   background: var(--bg-1);
   border-right: 1px solid var(--border);
   display: flex;
@@ -42,68 +95,65 @@
   user-select: none;
 }
 
-.sb-content {
+.explorer-hdr {
+  padding: 6px 6px 6px 12px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-height: 36px;
+}
+
+.explorer-hdr-title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  flex: 1;
+}
+
+.explorer-hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.explorer-hdr-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.explorer-hdr-btn:hover { background: var(--bg-3); color: var(--text-1); }
+
+.explorer-body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
-/* Section */
-.sb-section { border-bottom: 1px solid var(--border); }
-
-.sb-section-hdr {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 10px 6px 8px;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-
-.sb-section-hdr:hover { background: var(--bg-3); }
-
-.sb-chevron {
-  display: flex;
-  align-items: center;
-  color: var(--text-2);
-  flex-shrink: 0;
-}
-
-.sb-section-icon { color: var(--text-2); flex-shrink: 0; }
-
-.sb-section-title {
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--text-1);
-  flex: 1;
-}
-
-.sb-badge {
-  font-size: 0.65rem;
-  font-weight: 600;
-  background: var(--accent);
-  color: #fff;
-  border-radius: 20px;
-  padding: 1px 6px;
-  flex-shrink: 0;
-}
-
-.sb-section-body { padding-bottom: 4px; }
+.explorer-content { padding-bottom: 8px; }
 
 /* Generic item row */
 .sb-item {
   display: flex;
   align-items: center;
-  padding: 4px 10px 4px 24px;
+  padding: 5px 12px 5px 16px;
   cursor: pointer;
   font-size: 0.9rem;
   color: var(--text-1);
   transition: background 0.1s, color 0.1s;
 }
 
-.sb-item:hover { background: var(--bg-3); color: var(--text-1); }
+.sb-item:hover { background: var(--bg-3); }
 .sb-item.active {
   color: var(--accent-hover);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -121,7 +171,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px 4px 20px;
+  padding: 5px 12px 5px 16px;
   cursor: default;
   font-size: 0.9rem;
   color: var(--text-1);
@@ -134,19 +184,19 @@
 .sb-todo-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sb-todo-item.done .sb-todo-label { text-decoration: line-through; color: var(--text-3); }
 
-/* VS Code tree rows (spaces) */
+/* Tree rows (spaces) */
 .sb-tree-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px 4px 10px;
+  padding: 5px 12px 5px 10px;
   cursor: pointer;
   font-size: 0.9rem;
   color: var(--text-1);
   transition: background 0.1s, color 0.1s;
 }
 
-.sb-tree-row:hover { background: var(--bg-3); color: var(--text-1); }
+.sb-tree-row:hover { background: var(--bg-3); }
 .sb-tree-row.active { color: var(--accent-hover); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
 .sb-tree-chevron { display: flex; align-items: center; color: var(--text-2); flex-shrink: 0; }
@@ -159,14 +209,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px 3px 36px;
+  padding: 4px 12px 4px 36px;
   cursor: pointer;
   font-size: 0.86rem;
   color: var(--text-1);
-  transition: background 0.1s, color 0.1s;
+  transition: background 0.1s;
 }
 
-.sb-node-item:hover { background: var(--bg-3); color: var(--text-1); }
+.sb-node-item:hover { background: var(--bg-3); }
 .sb-node-icon { display: flex; align-items: center; flex-shrink: 0; }
 
 /* Inline add input */
@@ -188,7 +238,7 @@
   font-size: 0.82rem;
   color: var(--text-3);
   font-style: italic;
-  padding: 4px 10px 4px 24px;
+  padding: 5px 12px 5px 16px;
 }
 
 /* Resize handle */

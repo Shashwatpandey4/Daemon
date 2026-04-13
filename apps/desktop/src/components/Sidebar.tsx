@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Database from "@tauri-apps/plugin-sql";
 import {
   CheckSquare, Pencil, Boxes,
-  ChevronRight, ChevronDown,
+  ChevronRight, ChevronDown, Plus,
   Globe, FileText, Image, File, FileCode, StickyNote, NotebookPen,
 } from "lucide-react";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
@@ -21,6 +21,8 @@ interface SpaceNode {
   url: string | null; file_path: string | null;
 }
 
+type Panel = "todo" | "whiteboards" | "spaces";
+
 // ── DB setup ───────────────────────────────────────────────────────────────
 
 let db: Awaited<ReturnType<typeof Database.load>> | null = null;
@@ -28,7 +30,6 @@ let db: Awaited<ReturnType<typeof Database.load>> | null = null;
 async function getDb() {
   if (!db) {
     db = await Database.load("sqlite:daemon.db");
-    // Ensure all tables exist (sidebar is the first thing rendered)
     await db.execute(`
       CREATE TABLE IF NOT EXISTS todos (
         id TEXT PRIMARY KEY, title TEXT NOT NULL,
@@ -62,7 +63,6 @@ async function getDb() {
         id TEXT PRIMARY KEY, name TEXT NOT NULL, folder_path TEXT, created_at INTEGER NOT NULL
       )
     `);
-    // Migration: add folder_path to existing installs
     try { await db.execute("ALTER TABLE spaces ADD COLUMN folder_path TEXT"); } catch { /* already exists */ }
     await db.execute(`
       CREATE TABLE IF NOT EXISTS notes (
@@ -104,8 +104,8 @@ interface CtxState { x: number; y: number; items: CtxItem[] }
 // ── Component ──────────────────────────────────────────────────────────────
 
 export default function Sidebar({ active, onActivate, onDataChange }: Props) {
-  const [width, setWidth] = useState(240);
-  const [sections, setSections] = useState({ todo: true, whiteboards: true, spaces: true });
+  const [activePanel, setActivePanel] = useState<Panel | null>("spaces");
+  const [panelWidth, setPanelWidth] = useState(240);
   const [ctx, setCtx] = useState<CtxState | null>(null);
 
   // TODO
@@ -127,10 +127,9 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
 
   const resizerRef = useRef<{ startX: number; startW: number } | null>(null);
 
-  // Auto-focus
-  useEffect(() => { if (addingTodo)   todoInputRef.current?.focus();  }, [addingTodo]);
-  useEffect(() => { if (addingBoard)  boardInputRef.current?.focus(); }, [addingBoard]);
-  useEffect(() => { if (addingSpace)  spaceInputRef.current?.focus(); }, [addingSpace]);
+  useEffect(() => { if (addingTodo)  todoInputRef.current?.focus();  }, [addingTodo]);
+  useEffect(() => { if (addingBoard) boardInputRef.current?.focus(); }, [addingBoard]);
+  useEffect(() => { if (addingSpace) spaceInputRef.current?.focus(); }, [addingSpace]);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
 
@@ -151,7 +150,6 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
     const db = await getDb();
     const rows = await db.select<Space[]>("SELECT id, name, folder_path, created_at FROM spaces ORDER BY created_at ASC");
 
-    // Backfill folders for spaces that predate this feature
     for (const s of rows) {
       if (!s.folder_path) {
         try {
@@ -162,7 +160,6 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
       }
     }
 
-    // Auto-create spaces for folders in ~/Daemon/ that aren't in the DB yet
     try {
       const folders = await invoke<string[]>("list_daemon_folders");
       const knownPaths = new Set(rows.map(s => s.folder_path).filter(Boolean));
@@ -179,8 +176,7 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
         }
       }
       if (added) {
-        const updated = await db.select<Space[]>("SELECT id, name, folder_path, created_at FROM spaces ORDER BY created_at ASC");
-        setSpaces(updated);
+        setSpaces(await db.select<Space[]>("SELECT id, name, folder_path, created_at FROM spaces ORDER BY created_at ASC"));
         return;
       }
     } catch { /* ignore */ }
@@ -282,10 +278,7 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   }
 
   async function openNode(node: SpaceNode) {
-    if (node.node_type === "doc") {
-      onActivate({ type: "note", noteId: node.id });
-      return;
-    }
+    if (node.node_type === "doc") { onActivate({ type: "note", noteId: node.id }); return; }
     if (node.node_type === "file" && node.file_path) {
       if (node.file_path.toLowerCase().endsWith(".pdf")) {
         onActivate({ type: "pdf", nodeId: node.id, filePath: node.file_path });
@@ -299,10 +292,6 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
     } catch { /* ignore */ }
   }
 
-  function toggleSection(k: keyof typeof sections) {
-    setSections(prev => ({ ...prev, [k]: !prev[k] }));
-  }
-
   function toggleSpace(spaceId: string) {
     const willExpand = !expandedSpaces.has(spaceId);
     setExpandedSpaces(prev => {
@@ -314,22 +303,22 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   }
 
   function nodeIcon(n: SpaceNode) {
-    if (n.node_type === "doc")  return <NotebookPen size={11} color="#22c55e" />;
-    if (n.node_type === "link") return <Globe size={11} color="#3b82f6" />;
-    if (n.node_type === "note") return <StickyNote size={11} color="#f59e0b" />;
+    if (n.node_type === "doc")  return <NotebookPen size={12} color="#22c55e" />;
+    if (n.node_type === "link") return <Globe size={12} color="#3b82f6" />;
+    if (n.node_type === "note") return <StickyNote size={12} color="#f59e0b" />;
     const ext = (n.file_path ?? n.title).split(".").pop()?.toLowerCase() ?? "";
-    if (ext === "pdf") return <FileText size={11} color="#ef4444" />;
-    if (["png","jpg","jpeg","gif","webp","svg"].includes(ext)) return <Image size={11} color="#22c55e" />;
-    if (["md","txt","csv"].includes(ext)) return <FileCode size={11} color="#3b82f6" />;
-    return <File size={11} />;
+    if (ext === "pdf") return <FileText size={12} color="#ef4444" />;
+    if (["png","jpg","jpeg","gif","webp","svg"].includes(ext)) return <Image size={12} color="#22c55e" />;
+    if (["md","txt","csv"].includes(ext)) return <FileCode size={12} color="#3b82f6" />;
+    return <File size={12} />;
   }
 
   // ── Context menus ─────────────────────────────────────────────────────────
 
-  function ctxTodoSection(e: React.MouseEvent) {
+  function ctxTodoPanel(e: React.MouseEvent) {
     e.preventDefault(); e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items: [
-      { label: "New Task", onClick: () => { setSections(s => ({ ...s, todo: true })); setAddingTodo(true); } },
+      { label: "New Task", onClick: () => setAddingTodo(true) },
     ]});
   }
   function ctxTodoItem(e: React.MouseEvent, t: Todo) {
@@ -339,10 +328,10 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
       { label: "Delete", onClick: () => deleteTodo(t.id), danger: true, separator: true },
     ]});
   }
-  function ctxBoardSection(e: React.MouseEvent) {
+  function ctxBoardPanel(e: React.MouseEvent) {
     e.preventDefault(); e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items: [
-      { label: "New Board", onClick: () => { setSections(s => ({ ...s, whiteboards: true })); setAddingBoard(true); } },
+      { label: "New Board", onClick: () => setAddingBoard(true) },
     ]});
   }
   function ctxBoardItem(e: React.MouseEvent, b: Board) {
@@ -351,10 +340,10 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
       { label: "Delete Board", onClick: () => deleteBoard(b.id), danger: true },
     ]});
   }
-  function ctxSpaceSection(e: React.MouseEvent) {
+  function ctxSpacePanel(e: React.MouseEvent) {
     e.preventDefault(); e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items: [
-      { label: "New Space", onClick: () => { setSections(s => ({ ...s, spaces: true })); setAddingSpace(true); } },
+      { label: "New Space", onClick: () => setAddingSpace(true) },
     ]});
   }
   async function createDoc(spaceId: string) {
@@ -369,7 +358,6 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
     await loadSpaceNodes(spaceId);
     onActivate({ type: "note", noteId: id });
   }
-
   function ctxSpaceRow(e: React.MouseEvent, s: Space) {
     e.preventDefault(); e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items: [
@@ -390,10 +378,10 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
 
   function onResizerDown(e: React.MouseEvent) {
     e.preventDefault();
-    resizerRef.current = { startX: e.clientX, startW: width };
+    resizerRef.current = { startX: e.clientX, startW: panelWidth };
     const move = (e: MouseEvent) => {
       if (!resizerRef.current) return;
-      setWidth(Math.min(400, Math.max(160, resizerRef.current.startW + e.clientX - resizerRef.current.startX)));
+      setPanelWidth(Math.min(480, Math.max(160, resizerRef.current.startW + e.clientX - resizerRef.current.startX)));
     };
     const up = () => { resizerRef.current = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
     window.addEventListener("mousemove", move);
@@ -406,20 +394,70 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
 
   return (
     <>
-      <aside className="sidebar" style={{ width }}>
-        <div className="sb-content">
+      {/* ── Activity bar ── */}
+      <div className="activity-bar">
+        <button
+          className={`ab-btn${activePanel === "todo" ? " active" : ""}`}
+          title="Todo"
+          onClick={() => setActivePanel(p => p === "todo" ? null : "todo")}
+        >
+          <CheckSquare size={22} />
+          <span className="ab-label">Todo</span>
+          {pendingCount > 0 && <span className="ab-dot" />}
+        </button>
 
-          {/* ─── TODO ─────────────────────────────────────────── */}
-          <div className="sb-section">
-            <div className="sb-section-hdr" onClick={() => toggleSection("todo")} onContextMenu={ctxTodoSection}>
-              <span className="sb-chevron">{sections.todo ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
-              <CheckSquare size={12} className="sb-section-icon" />
-              <span className="sb-section-title">Todo</span>
-              {pendingCount > 0 && <span className="sb-badge">{pendingCount}</span>}
+        <button
+          className={`ab-btn${activePanel === "whiteboards" ? " active" : ""}`}
+          title="Whiteboards"
+          onClick={() => setActivePanel(p => p === "whiteboards" ? null : "whiteboards")}
+        >
+          <Pencil size={22} />
+          <span className="ab-label">Boards</span>
+        </button>
+
+        <button
+          className={`ab-btn${activePanel === "spaces" ? " active" : ""}`}
+          title="Spaces"
+          onClick={() => setActivePanel(p => p === "spaces" ? null : "spaces")}
+        >
+          <Boxes size={22} />
+          <span className="ab-label">Spaces</span>
+        </button>
+      </div>
+
+      {/* ── Explorer panel ── */}
+      {activePanel && (
+        <aside className="explorer-panel" style={{ width: panelWidth }}>
+          <div className="explorer-hdr">
+            <span className="explorer-hdr-title">
+              {activePanel === "todo" && "TODO"}
+              {activePanel === "whiteboards" && "WHITEBOARDS"}
+              {activePanel === "spaces" && "SPACES"}
+            </span>
+            <div className="explorer-hdr-actions">
+              {activePanel === "todo" && (
+                <button className="explorer-hdr-btn" title="New Task" onClick={() => setAddingTodo(true)}>
+                  <Plus size={14} />
+                </button>
+              )}
+              {activePanel === "whiteboards" && (
+                <button className="explorer-hdr-btn" title="New Board" onClick={() => setAddingBoard(true)}>
+                  <Plus size={14} />
+                </button>
+              )}
+              {activePanel === "spaces" && (
+                <button className="explorer-hdr-btn" title="New Space" onClick={() => setAddingSpace(true)}>
+                  <Plus size={14} />
+                </button>
+              )}
             </div>
+          </div>
 
-            {sections.todo && (
-              <div className="sb-section-body" onContextMenu={ctxTodoSection}>
+          <div className="explorer-body">
+
+            {/* ── Todo panel ── */}
+            {activePanel === "todo" && (
+              <div className="explorer-content" onContextMenu={ctxTodoPanel}>
                 {todos.map(t => (
                   <label key={t.id} className={`sb-todo-item${t.completed ? " done" : ""}`} onContextMenu={e => ctxTodoItem(e, t)}>
                     <input type="checkbox" checked={t.completed}
@@ -438,18 +476,10 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
                 {todos.length === 0 && !addingTodo && <p className="sb-empty">Right-click to add a task</p>}
               </div>
             )}
-          </div>
 
-          {/* ─── WHITEBOARDS ──────────────────────────────────── */}
-          <div className="sb-section">
-            <div className="sb-section-hdr" onClick={() => toggleSection("whiteboards")} onContextMenu={ctxBoardSection}>
-              <span className="sb-chevron">{sections.whiteboards ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
-              <Pencil size={12} className="sb-section-icon" />
-              <span className="sb-section-title">Whiteboards</span>
-            </div>
-
-            {sections.whiteboards && (
-              <div className="sb-section-body" onContextMenu={ctxBoardSection}>
+            {/* ── Whiteboards panel ── */}
+            {activePanel === "whiteboards" && (
+              <div className="explorer-content" onContextMenu={ctxBoardPanel}>
                 {boards.map(b => (
                   <div key={b.id}
                     className={`sb-item${active?.type === "whiteboard" && active.boardId === b.id ? " active" : ""}`}
@@ -468,18 +498,10 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
                 {boards.length === 0 && !addingBoard && <p className="sb-empty">Right-click to add a board</p>}
               </div>
             )}
-          </div>
 
-          {/* ─── SPACES ───────────────────────────────────────── */}
-          <div className="sb-section">
-            <div className="sb-section-hdr" onClick={() => toggleSection("spaces")} onContextMenu={ctxSpaceSection}>
-              <span className="sb-chevron">{sections.spaces ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
-              <Boxes size={12} className="sb-section-icon" />
-              <span className="sb-section-title">Spaces</span>
-            </div>
-
-            {sections.spaces && (
-              <div className="sb-section-body" onContextMenu={ctxSpaceSection}>
+            {/* ── Spaces panel ── */}
+            {activePanel === "spaces" && (
+              <div className="explorer-content" onContextMenu={ctxSpacePanel}>
                 {spaces.map(s => {
                   const expanded = expandedSpaces.has(s.id);
                   const nodes = spaceNodes[s.id] ?? [];
@@ -491,8 +513,8 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
                         onClick={() => { onActivate({ type: "spaces", spaceId: s.id }); toggleSpace(s.id); }}
                         onContextMenu={e => ctxSpaceRow(e, s)}
                       >
-                        <span className="sb-tree-chevron">{expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
-                        <Boxes size={11} className="sb-tree-icon" />
+                        <span className="sb-tree-chevron">{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
+                        <Boxes size={13} className="sb-tree-icon" />
                         <span className="sb-item-label">{s.name}</span>
                       </div>
 
@@ -525,11 +547,11 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
                 {spaces.length === 0 && !addingSpace && <p className="sb-empty">Right-click to add a space</p>}
               </div>
             )}
-          </div>
 
-        </div>
-        <div className="sb-resizer" onMouseDown={onResizerDown} />
-      </aside>
+          </div>
+          <div className="sb-resizer" onMouseDown={onResizerDown} />
+        </aside>
+      )}
 
       {ctx && <ContextMenu {...ctx} onClose={() => setCtx(null)} />}
     </>
