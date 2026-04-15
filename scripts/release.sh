@@ -66,7 +66,7 @@ Icon=daemon
 Terminal=false
 Type=Application
 Categories=Utility;
-StartupWMClass=Daemon
+StartupWMClass=com.shashwat.daemon
 EOF
 
 # --- refresh app launcher ---
