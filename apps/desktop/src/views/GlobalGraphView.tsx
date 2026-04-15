@@ -46,7 +46,7 @@ function SpaceHubNode({ data }: { data: HubData }) {
 
 // ── Radial edge — center-to-center, trimmed at node circumference ────────────
 
-function RadialEdge({ id, source, target, style, data }: EdgeProps) {
+function RadialEdge({ source, target, style }: EdgeProps) {
   const { getNode } = useReactFlow();
   const sNode = getNode(source);
   const tNode = getNode(target);
