@@ -84,6 +84,48 @@ fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// Creates a directory (and all parents) at the given path.
+#[tauri::command]
+fn create_folder(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+/// Scans one level deep: returns root files + subfolders with their files.
+#[tauri::command]
+fn scan_space_folder_deep(folder_path: String) -> Result<serde_json::Value, String> {
+    let root = std::path::PathBuf::from(&folder_path);
+    if !root.exists() {
+        return Ok(serde_json::json!({ "root_files": [], "subfolders": [] }));
+    }
+    let mut root_files: Vec<String> = Vec::new();
+    let mut subfolders: Vec<serde_json::Value> = Vec::new();
+
+    for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_file() {
+            root_files.push(path.to_string_lossy().to_string());
+        } else if path.is_dir() {
+            let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let mut files: Vec<String> = Vec::new();
+            if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                for sub_entry in sub_entries.flatten() {
+                    let sp = sub_entry.path();
+                    if sp.is_file() {
+                        files.push(sp.to_string_lossy().to_string());
+                    }
+                }
+            }
+            subfolders.push(serde_json::json!({
+                "name": name,
+                "path": path.to_string_lossy().to_string(),
+                "files": files,
+            }));
+        }
+    }
+    Ok(serde_json::json!({ "root_files": root_files, "subfolders": subfolders }))
+}
+
 /// Reads a file from disk and returns raw bytes over the binary IPC channel.
 #[tauri::command]
 fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
@@ -257,13 +299,14 @@ async fn fetch_arxiv_metadata(arxiv_id: String) -> Result<serde_json::Value, Str
     }))
 }
 
-/// Copies a file into the app's data dir under `files/<space_id>/`.
+/// Copies a file into the space's folder (if provided) or the app data dir.
 /// Returns the absolute destination path.
 #[tauri::command]
 fn import_file(
     app: tauri::AppHandle,
     space_id: String,
     src: String,
+    folder_path: Option<String>,
 ) -> Result<String, String> {
     let src_path = PathBuf::from(&src);
     let file_name = src_path
@@ -272,12 +315,17 @@ fn import_file(
         .to_string_lossy()
         .to_string();
 
-    let dest_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("files")
-        .join(&space_id);
+    // Prefer the space's filesystem folder; fall back to app data dir
+    let dest_dir = if let Some(fp) = folder_path {
+        PathBuf::from(fp)
+    } else {
+        app
+            .path()
+            .app_local_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("files")
+            .join(&space_id)
+    };
 
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
 
@@ -311,7 +359,7 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, list_daemon_folders, read_file_bytes, write_text_file, delete_folder, download_file, fetch_arxiv_metadata, fetch_and_parse_ics])
+        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, scan_space_folder_deep, list_daemon_folders, read_file_bytes, write_text_file, create_folder, delete_folder, download_file, fetch_arxiv_metadata, fetch_and_parse_ics])
         .setup(|app| {
             let db_path = app
                 .path()

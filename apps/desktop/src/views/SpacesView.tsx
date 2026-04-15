@@ -10,9 +10,10 @@ import ContextMenu, { type CtxItem } from "../components/ContextMenu";
 export interface SpaceNode {
   id: string; space_id: string; title: string;
   content: string | null; url: string | null; file_path: string | null;
-  node_type: "link" | "file" | "note" | "doc";
+  node_type: "link" | "file" | "note" | "doc" | "folder";
   tags: string | null; color: string | null;
   pos_x: number; pos_y: number; created_at: number;
+  folder_group?: string | null; // computed in-memory, not persisted
 }
 
 export interface SpaceEdge {
@@ -44,6 +45,7 @@ interface CtxState { x: number; y: number; items: CtxItem[] }
 export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNodeClose, onNodeOpen, onFileOpen }: Props) {
   const [nodes, setNodes] = useState<SpaceNode[]>([]);
   const [edges, setEdges] = useState<SpaceEdge[]>([]);
+  const [folderPath, setFolderPath] = useState<string | null>(null);
   const [showAddNode, setShowAddNode] = useState(false);
   const [ctx, setCtx] = useState<CtxState | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "error" | "ok" } | null>(null);
@@ -61,14 +63,52 @@ export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNode
       db.select<{ folder_path: string | null }[]>("SELECT folder_path FROM spaces WHERE id = ?", [spaceId]),
     ]);
 
-    const folderPath = spaceRows[0]?.folder_path;
-    if (folderPath) {
-      try {
-        const files = await invoke<string[]>("scan_space_folder", { folderPath });
-        const knownPaths = new Set(n.map(node => node.file_path).filter(Boolean));
-        const newFiles = files.filter(f => !knownPaths.has(f));
-        let insertCount = 0;
-        for (const filePath of newFiles) {
+    const folderPath = spaceRows[0]?.folder_path ?? null;
+    setFolderPath(folderPath);
+
+    if (!folderPath) { setNodes(n); setEdges(e); return; }
+
+    try {
+      const deep = await invoke<{
+        root_files: string[];
+        subfolders: { name: string; path: string; files: string[] }[];
+      }>("scan_space_folder_deep", { folderPath });
+
+      const knownPaths = new Set(n.map(nd => nd.file_path).filter(Boolean));
+      let insertCount = 0;
+
+      // Register any new root-level files
+      for (const filePath of deep.root_files) {
+        if (knownPaths.has(filePath)) continue;
+        const fileName = await basename(filePath);
+        const ext = await extname(filePath);
+        const title = fileName.replace(new RegExp(`\\.${ext}$`, "i"), "") || fileName;
+        const id = crypto.randomUUID();
+        const { x, y } = nextNodePos(n.length + insertCount);
+        await db.execute(
+          `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [id, spaceId, title, null, null, filePath, "file", JSON.stringify([]), x, y, Date.now()]
+        );
+        insertCount++;
+      }
+
+      // Register folder nodes + their files
+      for (const sub of deep.subfolders) {
+        // Ensure a "folder" node exists for this subfolder
+        if (!knownPaths.has(sub.path)) {
+          const id = crypto.randomUUID();
+          const { x, y } = nextNodePos(n.length + insertCount);
+          await db.execute(
+            `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, spaceId, sub.name, null, null, sub.path, "folder", JSON.stringify([]), x, y, Date.now()]
+          );
+          insertCount++;
+        }
+        // Register files inside the subfolder
+        for (const filePath of sub.files) {
+          if (knownPaths.has(filePath)) continue;
           const fileName = await basename(filePath);
           const ext = await extname(filePath);
           const title = fileName.replace(new RegExp(`\\.${ext}$`, "i"), "") || fileName;
@@ -81,20 +121,34 @@ export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNode
           );
           insertCount++;
         }
-        if (insertCount > 0) {
-          const [n2, e2] = await Promise.all([
-            db.select<SpaceNode[]>("SELECT * FROM space_nodes WHERE space_id = ? ORDER BY created_at ASC", [spaceId]),
-            db.select<SpaceEdge[]>("SELECT * FROM space_edges WHERE space_id = ?", [spaceId]),
-          ]);
-          setNodes(n2);
-          setEdges(e2);
-          return;
-        }
-      } catch { /* folder scan failed, fall through */ }
-    }
+      }
 
-    setNodes(n);
-    setEdges(e);
+      // Reload from DB if anything was inserted
+      const finalNodes = insertCount > 0
+        ? await db.select<SpaceNode[]>("SELECT * FROM space_nodes WHERE space_id = ? ORDER BY created_at ASC", [spaceId])
+        : n;
+      const finalEdges = insertCount > 0
+        ? await db.select<SpaceEdge[]>("SELECT * FROM space_edges WHERE space_id = ?", [spaceId])
+        : e;
+
+      // Build a path → subfolder path lookup for folder_group assignment
+      const fileToGroup = new Map<string, string>();
+      for (const sub of deep.subfolders) {
+        for (const f of sub.files) fileToGroup.set(f, sub.path);
+      }
+
+      // Augment nodes with folder_group (computed, not in DB)
+      const augmented = finalNodes.map(nd => ({
+        ...nd,
+        folder_group: nd.file_path ? (fileToGroup.get(nd.file_path) ?? null) : null,
+      }));
+
+      setNodes(augmented);
+      setEdges(finalEdges);
+    } catch {
+      setNodes(n);
+      setEdges(e);
+    }
   }
 
   useEffect(() => { loadGraph(); }, [spaceId, refreshKey]);
@@ -112,7 +166,7 @@ export default function SpacesView({ spaceId, refreshKey, openAddNode, onAddNode
     let url: string | null = null, filePath: string | null = null;
     if (draft.filePath) {
       try {
-        filePath = await invoke<string>("import_file", { spaceId, src: draft.filePath });
+        filePath = await invoke<string>("import_file", { spaceId, src: draft.filePath, folderPath });
         nodeType = "file";
       } catch (err) { showToast(`Failed to import file — ${String(err)}`, "error"); return; }
     } else if (isUrl) {

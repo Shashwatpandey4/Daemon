@@ -37,6 +37,8 @@ const NODE_RADIUS = 40;
 
 interface SimNode extends d3.SimulationNodeDatum {
   id: string;
+  folderGroup?: string | null;
+  isFolder?: boolean;
 }
 
 interface Props {
@@ -86,19 +88,36 @@ export default function SpaceGraph({ nodes, edges, onNodeMove, onEdgeAdd, onEdge
       const prev = positionedRef.current.get(n.id);
       return {
         id: n.id,
+        folderGroup: n.folder_group ?? null,
+        isFolder: n.node_type === "folder",
         x: prev?.x ?? n.pos_x ?? (Math.random() * 600 - 300),
         y: prev?.y ?? n.pos_y ?? (Math.random() * 400 - 200),
       };
     });
 
-    const simLinks = edges.map(e => ({ source: e.source, target: e.target }));
+    // Persisted edges + synthetic cluster links (folder → its files, short distance)
+    const persistedLinks = edges.map(e => ({ source: e.source, target: e.target, cluster: false }));
+    const clusterLinks: { source: string; target: string; cluster: boolean }[] = [];
+    for (const sn of simNodes) {
+      if (sn.folderGroup) {
+        // Find the folder node for this file
+        const folderNode = simNodes.find(fn => fn.isFolder && nodes.find(n => n.id === fn.id)?.file_path === sn.folderGroup);
+        if (folderNode) clusterLinks.push({ source: folderNode.id, target: sn.id, cluster: true });
+      }
+    }
+    const allSimLinks = [...persistedLinks, ...clusterLinks];
 
     // Kill previous sim
     simRef.current?.stop();
 
     const sim = d3.forceSimulation<SimNode>(simNodes)
       .force("charge", d3.forceManyBody().strength(-400))
-      .force("link", d3.forceLink(simLinks).id((d) => (d as SimNode).id).distance(140).strength(0.6))
+      .force("link",
+        d3.forceLink<SimNode, { source: string; target: string; cluster: boolean }>(allSimLinks)
+          .id(d => d.id)
+          .distance(l => l.cluster ? 80 : 140)
+          .strength(l => l.cluster ? 0.9 : 0.6)
+      )
       .force("center", d3.forceCenter(0, 0))
       .force("collision", d3.forceCollide(NODE_RADIUS + 20))
       .alphaDecay(0.03)
@@ -208,5 +227,6 @@ function buildFlowNode(
       onOpen,
       onFileOpen,
     } satisfies CircleNodeData,
+    style: src?.node_type === "folder" ? { width: 96, height: 96 } : undefined,
   };
 }

@@ -3,7 +3,7 @@ import { Handle, Position, NodeProps } from "@xyflow/react";
 
 export interface CircleNodeData {
   title: string;
-  node_type: "link" | "file" | "note" | "doc";
+  node_type: "link" | "file" | "note" | "doc" | "folder";
   file_path: string | null;
   tags: string[];
   color: string | null;
@@ -21,10 +21,11 @@ export const PALETTE = [
 ];
 
 const TYPE_DEFAULTS: Record<string, string> = {
-  link: "#3b82f6",
-  file: "#ef4444",
-  note: "#f59e0b",
-  doc:  "#22c55e",
+  link:   "#3b82f6",
+  file:   "#ef4444",
+  note:   "#f59e0b",
+  doc:    "#22c55e",
+  folder: "#a78bfa",
 };
 
 export function tagColor(tag: string) {
@@ -67,11 +68,13 @@ export const CircleNode = memo(({ id, data }: NodeProps) => {
         style={(d.node_type === "doc" || (d.node_type === "file" && d.file_path?.toLowerCase().endsWith(".pdf"))) ? { cursor: "pointer" } : undefined}
         title={d.node_type === "doc" ? "Open doc" : d.node_type === "file" ? "Open PDF" : undefined}
       >
-        {d.node_type === "doc"
-          ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📄</span>
-          : d.node_type === "file" && d.file_path?.toLowerCase().endsWith(".pdf")
-            ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📕</span>
-            : <span className="circle-node-initials">{initials}</span>
+        {d.node_type === "folder"
+          ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📁</span>
+          : d.node_type === "doc"
+            ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📄</span>
+            : d.node_type === "file" && d.file_path?.toLowerCase().endsWith(".pdf")
+              ? <span className="circle-node-initials" style={{ fontSize: "1.4rem" }}>📕</span>
+              : <span className="circle-node-initials">{initials}</span>
         }
       </div>
       <span className="circle-node-label">{d.title}</span>

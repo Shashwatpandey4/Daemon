@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Database from "@tauri-apps/plugin-sql";
 import {
-  CheckSquare, Pencil, Boxes, CalendarDays,
-  ChevronRight, ChevronDown, Plus, Download,
+  CheckSquare, Pencil, Boxes, CalendarDays, Network,
+  ChevronRight, ChevronDown, Plus, Download, FilePlus, FolderPlus, Folder,
   Globe, FileText, Image, File, FileCode, StickyNote, NotebookPen,
 } from "lucide-react";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
@@ -17,7 +17,7 @@ interface Board { id: string; name: string; created_at: number; }
 interface Space { id: string; name: string; folder_path: string | null; created_at: number; }
 interface SpaceNode {
   id: string; space_id: string; title: string;
-  node_type: "link" | "file" | "note" | "doc";
+  node_type: "link" | "file" | "note" | "doc" | "folder";
   url: string | null; file_path: string | null;
 }
 
@@ -136,13 +136,18 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
   const [expandedSpaces, setExpandedSpaces] = useState<Set<string>>(new Set());
   const [spaceNodes, setSpaceNodes] = useState<Record<string, SpaceNode[]>>({});
   const [addingSpace, setAddingSpace] = useState(false);
+  const [hoveredSpaceId, setHoveredSpaceId] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [inlineAdd, setInlineAdd] = useState<{ spaceId: string; type: "file" | "folder"; basePath: string | null; afterNodeId: string | null } | null>(null);
   const spaceInputRef = useRef<HTMLInputElement>(null);
+  const inlineAddRef = useRef<HTMLInputElement>(null);
 
   const resizerRef = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => { if (addingTodo)  todoInputRef.current?.focus();  }, [addingTodo]);
   useEffect(() => { if (addingBoard) boardInputRef.current?.focus(); }, [addingBoard]);
   useEffect(() => { if (addingSpace) spaceInputRef.current?.focus(); }, [addingSpace]);
+  useEffect(() => { if (inlineAdd)   inlineAddRef.current?.focus();  }, [inlineAdd]);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
 
@@ -333,6 +338,7 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
   }
 
   function nodeIcon(n: SpaceNode) {
+    if (n.node_type === "folder") return <Folder size={12} color="#a78bfa" />;
     if (n.node_type === "doc")  return <NotebookPen size={12} color="#22c55e" />;
     if (n.node_type === "link") return <Globe size={12} color="#3b82f6" />;
     if (n.node_type === "note") return <StickyNote size={12} color="#f59e0b" />;
@@ -388,6 +394,46 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
     );
     await loadSpaceNodes(spaceId);
     onActivate({ type: "note", noteId: id });
+  }
+
+  async function commitInlineAdd(rawName: string) {
+    if (!inlineAdd) return;
+    const { spaceId, type, basePath } = inlineAdd;
+    setInlineAdd(null);
+    const name = rawName.trim();
+    if (!name) return;
+
+    if (type === "file") {
+      const fileName = name.includes(".") ? name : `${name}.md`;
+      const filePath = basePath ? `${basePath}/${fileName}` : null;
+      if (filePath) {
+        try { await invoke("write_text_file", { path: filePath, content: "" }); } catch { /* ignore */ }
+      }
+      const db = await getDb();
+      const id = crypto.randomUUID();
+      const title = fileName.replace(/\.[^.]+$/, "");
+      await db.execute(
+        `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, spaceId, title, null, null, filePath, "file", JSON.stringify([]), 0, 0, Date.now()]
+      );
+      await loadSpaceNodes(spaceId);
+      if (filePath) onActivate({ type: "textfile", filePath });
+    } else {
+      const subPath = basePath ? `${basePath}/${name}` : null;
+      if (subPath) {
+        try { await invoke("create_folder", { path: subPath }); } catch { /* ignore */ }
+      }
+      const db = await getDb();
+      const id = crypto.randomUUID();
+      await db.execute(
+        `INSERT INTO space_nodes (id, space_id, title, content, url, file_path, node_type, tags, pos_x, pos_y, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, spaceId, name, null, null, subPath, "folder", JSON.stringify([]), 0, 0, Date.now()]
+      );
+      await loadSpaceNodes(spaceId);
+      onActivate({ type: "spaces", spaceId });
+    }
   }
   function ctxSpaceRow(e: React.MouseEvent, s: Space) {
     e.preventDefault(); e.stopPropagation();
@@ -458,6 +504,14 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
           onClick={() => { onActivate({ type: "calendar" }); setActivePanel(null); }}
         >
           <CalendarDays size={22} />
+        </button>
+
+        <button
+          className={`ab-btn${active?.type === "global-graph" ? " active" : ""}`}
+          title="Global Graph"
+          onClick={() => { onActivate({ type: "global-graph" }); setActivePanel(null); }}
+        >
+          <Network size={22} />
         </button>
       </div>
 
@@ -554,25 +608,91 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
                         className={`sb-tree-row${isActive ? " active" : ""}`}
                         onClick={() => { onActivate({ type: "spaces", spaceId: s.id }); toggleSpace(s.id); }}
                         onContextMenu={e => ctxSpaceRow(e, s)}
+                        onMouseEnter={() => setHoveredSpaceId(s.id)}
+                        onMouseLeave={() => setHoveredSpaceId(null)}
                       >
                         <span className="sb-tree-chevron">{expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                         <Boxes size={13} className="sb-tree-icon" />
                         <span className="sb-item-label">{s.name}</span>
+                        {hoveredSpaceId === s.id && (
+                          <span className="sb-row-actions">
+                            <button
+                              className="sb-row-btn"
+                              title="New File"
+                              onClick={e => { e.stopPropagation(); setInlineAdd({ spaceId: s.id, type: "file", basePath: s.folder_path, afterNodeId: null }); if (!expandedSpaces.has(s.id)) toggleSpace(s.id); }}
+                            >
+                              <FilePlus size={12} />
+                            </button>
+                            <button
+                              className="sb-row-btn"
+                              title="New Folder"
+                              onClick={e => { e.stopPropagation(); setInlineAdd({ spaceId: s.id, type: "folder", basePath: s.folder_path, afterNodeId: null }); if (!expandedSpaces.has(s.id)) toggleSpace(s.id); }}
+                            >
+                              <FolderPlus size={12} />
+                            </button>
+                          </span>
+                        )}
                       </div>
 
                       {expanded && (
                         <ul className="sb-node-list">
-                          {nodes.length === 0
+                          {nodes.length === 0 && inlineAdd?.spaceId !== s.id
                             ? <li className="sb-empty" style={{ paddingLeft: 40 }}>Empty</li>
                             : nodes.map(n => (
-                              <li key={n.id} className="sb-node-item"
-                                onClick={() => openNode(n)}
-                                onContextMenu={e => ctxNodeRow(e, n)}>
-                                <span className="sb-node-icon">{nodeIcon(n)}</span>
-                                <span className="sb-item-label">{n.title}</span>
-                              </li>
+                              <React.Fragment key={n.id}>
+                                <li
+                                  className={`sb-node-item${n.node_type === "folder" ? " sb-node-folder" : ""}`}
+                                  onClick={() => openNode(n)}
+                                  onContextMenu={e => ctxNodeRow(e, n)}
+                                  onMouseEnter={() => n.node_type === "folder" && setHoveredNodeId(n.id)}
+                                  onMouseLeave={() => setHoveredNodeId(null)}
+                                >
+                                  <span className="sb-node-icon">{nodeIcon(n)}</span>
+                                  <span className="sb-item-label">{n.title}</span>
+                                  {n.node_type === "folder" && hoveredNodeId === n.id && (
+                                    <span className="sb-row-actions">
+                                      <button className="sb-row-btn" title="New File"
+                                        onClick={e => { e.stopPropagation(); setInlineAdd({ spaceId: s.id, type: "file", basePath: n.file_path, afterNodeId: n.id }); }}>
+                                        <FilePlus size={12} />
+                                      </button>
+                                      <button className="sb-row-btn" title="New Folder"
+                                        onClick={e => { e.stopPropagation(); setInlineAdd({ spaceId: s.id, type: "folder", basePath: n.file_path, afterNodeId: n.id }); }}>
+                                        <FolderPlus size={12} />
+                                      </button>
+                                    </span>
+                                  )}
+                                </li>
+                                {inlineAdd?.spaceId === s.id && inlineAdd.afterNodeId === n.id && (
+                                  <li className="sb-inline-add" style={{ paddingLeft: 36 }}>
+                                    <span className="sb-node-icon">
+                                      {inlineAdd.type === "file" ? <FilePlus size={12} /> : <FolderPlus size={12} />}
+                                    </span>
+                                    <input
+                                      ref={inlineAddRef}
+                                      className="sb-add-input"
+                                      placeholder={inlineAdd.type === "file" ? "filename.md" : "folder name"}
+                                      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") commitInlineAdd(e.currentTarget.value); if (e.key === "Escape") setInlineAdd(null); }}
+                                      onBlur={e => commitInlineAdd(e.target.value)}
+                                    />
+                                  </li>
+                                )}
+                              </React.Fragment>
                             ))
                           }
+                          {inlineAdd?.spaceId === s.id && inlineAdd.afterNodeId === null && (
+                            <li className="sb-inline-add" style={{ paddingLeft: 28 }}>
+                              <span className="sb-node-icon">
+                                {inlineAdd.type === "file" ? <FilePlus size={12} /> : <FolderPlus size={12} />}
+                              </span>
+                              <input
+                                ref={inlineAddRef}
+                                className="sb-add-input"
+                                placeholder={inlineAdd.type === "file" ? "filename.md" : "folder name"}
+                                onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") commitInlineAdd(e.currentTarget.value); if (e.key === "Escape") setInlineAdd(null); }}
+                                onBlur={e => commitInlineAdd(e.target.value)}
+                              />
+                            </li>
+                          )}
                         </ul>
                       )}
                     </div>
