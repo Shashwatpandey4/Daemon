@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import Database from "@tauri-apps/plugin-sql";
 import {
-  CheckSquare, Pencil, Boxes,
-  ChevronRight, ChevronDown, Plus,
+  CheckSquare, Pencil, Boxes, CalendarDays,
+  ChevronRight, ChevronDown, Plus, Download,
   Globe, FileText, Image, File, FileCode, StickyNote, NotebookPen,
 } from "lucide-react";
 import { openUrl as tauriOpenUrl } from "@tauri-apps/plugin-opener";
@@ -52,6 +52,8 @@ async function getDb() {
         created_at INTEGER NOT NULL
       )
     `);
+    try { await db.execute("ALTER TABLE wb_notes ADD COLUMN width REAL"); } catch { /* exists */ }
+    try { await db.execute("ALTER TABLE wb_notes ADD COLUMN height REAL"); } catch { /* exists */ }
     await db.execute(`
       CREATE TABLE IF NOT EXISTS wb_note_edges (
         id TEXT PRIMARY KEY, whiteboard_id TEXT NOT NULL,
@@ -87,6 +89,14 @@ async function getDb() {
         source TEXT NOT NULL, target TEXT NOT NULL
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS calendar_events (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        date TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
   }
   return db;
 }
@@ -97,13 +107,16 @@ interface Props {
   active: ActiveView;
   onActivate: (view: ActiveView) => void;
   onDataChange: () => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onArxivImport: () => void;
 }
 
 interface CtxState { x: number; y: number; items: CtxItem[] }
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export default function Sidebar({ active, onActivate, onDataChange }: Props) {
+export default function Sidebar({ active, onActivate, onDataChange, collapsed, onToggleCollapse, onArxivImport }: Props) {
   const [activePanel, setActivePanel] = useState<Panel | null>("spaces");
   const [panelWidth, setPanelWidth] = useState(240);
   const [ctx, setCtx] = useState<CtxState | null>(null);
@@ -195,6 +208,13 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
 
   useEffect(() => { loadTodos(); loadBoards(); loadSpaces(); }, []);
 
+  // Refresh todos when a sticky note creates one externally
+  useEffect(() => {
+    const handler = () => loadTodos();
+    window.addEventListener("daemon:todos-changed", handler);
+    return () => window.removeEventListener("daemon:todos-changed", handler);
+  }, []);
+
   // ── TODO ops ─────────────────────────────────────────────────────────────
 
   async function addTodo(title: string) {
@@ -260,10 +280,14 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   }
 
   async function deleteSpace(id: string) {
+    const folderPath = spaces.find(s => s.id === id)?.folder_path ?? null;
     const db = await getDb();
     await db.execute("DELETE FROM spaces WHERE id = ?", [id]);
     await db.execute("DELETE FROM space_nodes WHERE space_id = ?", [id]);
     await db.execute("DELETE FROM space_edges WHERE space_id = ?", [id]);
+    if (folderPath) {
+      try { await invoke("delete_folder", { folderPath }); } catch { /* ignore */ }
+    }
     await loadSpaces();
     setSpaceNodes(prev => { const n = { ...prev }; delete n[id]; return n; });
     if (active?.type === "spaces" && active.spaceId === id) onActivate(null);
@@ -280,8 +304,14 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   async function openNode(node: SpaceNode) {
     if (node.node_type === "doc") { onActivate({ type: "note", noteId: node.id }); return; }
     if (node.node_type === "file" && node.file_path) {
-      if (node.file_path.toLowerCase().endsWith(".pdf")) {
+      const fp = node.file_path.toLowerCase();
+      if (fp.endsWith(".pdf")) {
         onActivate({ type: "pdf", nodeId: node.id, filePath: node.file_path });
+        return;
+      }
+      const { isTextFile } = await import("../views/TextFileView");
+      if (isTextFile(node.file_path)) {
+        onActivate({ type: "textfile", filePath: node.file_path });
         return;
       }
       try { await tauriOpenUrl(node.file_path); } catch { /* ignore */ }
@@ -344,6 +374,7 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
     e.preventDefault(); e.stopPropagation();
     setCtx({ x: e.clientX, y: e.clientY, items: [
       { label: "New Space", onClick: () => setAddingSpace(true) },
+      { label: "Import from arXiv…", onClick: onArxivImport, separator: true },
     ]});
   }
   async function createDoc(spaceId: string) {
@@ -393,7 +424,7 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
   const pendingCount = todos.filter(t => !t.completed).length;
 
   return (
-    <>
+    <div className={`sidebar-shell${collapsed ? " sidebar-collapsed" : ""}`}>
       {/* ── Activity bar ── */}
       <div className="activity-bar">
         <button
@@ -402,7 +433,6 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
           onClick={() => setActivePanel(p => p === "todo" ? null : "todo")}
         >
           <CheckSquare size={22} />
-          <span className="ab-label">Todo</span>
           {pendingCount > 0 && <span className="ab-dot" />}
         </button>
 
@@ -412,7 +442,6 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
           onClick={() => setActivePanel(p => p === "whiteboards" ? null : "whiteboards")}
         >
           <Pencil size={22} />
-          <span className="ab-label">Boards</span>
         </button>
 
         <button
@@ -421,7 +450,14 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
           onClick={() => setActivePanel(p => p === "spaces" ? null : "spaces")}
         >
           <Boxes size={22} />
-          <span className="ab-label">Spaces</span>
+        </button>
+
+        <button
+          className={`ab-btn${active?.type === "calendar" ? " active" : ""}`}
+          title="Calendar"
+          onClick={() => { onActivate({ type: "calendar" }); setActivePanel(null); }}
+        >
+          <CalendarDays size={22} />
         </button>
       </div>
 
@@ -446,9 +482,15 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
                 </button>
               )}
               {activePanel === "spaces" && (
-                <button className="explorer-hdr-btn" title="New Space" onClick={() => setAddingSpace(true)}>
-                  <Plus size={14} />
-                </button>
+                <>
+                  <button className="explorer-hdr-btn explorer-hdr-btn-arxiv" title="Import from arXiv" onClick={onArxivImport}>
+                    <Download size={13} />
+                    <span>arXiv</span>
+                  </button>
+                  <button className="explorer-hdr-btn" title="New Space" onClick={() => setAddingSpace(true)}>
+                    <Plus size={14} />
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -548,12 +590,18 @@ export default function Sidebar({ active, onActivate, onDataChange }: Props) {
               </div>
             )}
 
+
           </div>
           <div className="sb-resizer" onMouseDown={onResizerDown} />
         </aside>
       )}
 
       {ctx && <ContextMenu {...ctx} onClose={() => setCtx(null)} />}
-    </>
+
+      {/* ── Collapse toggle ── */}
+      <button className="sidebar-collapse-btn" onClick={onToggleCollapse} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+        {collapsed ? "›" : "‹"}
+      </button>
+    </div>
   );
 }

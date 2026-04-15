@@ -68,11 +68,193 @@ fn scan_space_folder(folder_path: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
+/// Deletes a folder and all its contents from disk.
+#[tauri::command]
+fn delete_folder(folder_path: String) -> Result<(), String> {
+    let path = std::path::PathBuf::from(&folder_path);
+    if path.exists() {
+        std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Writes UTF-8 text content to a file on disk.
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content.as_bytes()).map_err(|e| e.to_string())
+}
+
 /// Reads a file from disk and returns raw bytes over the binary IPC channel.
 #[tauri::command]
 fn read_file_bytes(path: String) -> Result<tauri::ipc::Response, String> {
     let bytes = std::fs::read(&path).map_err(|e| format!("Cannot read '{}': {}", path, e))?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Fetches an ICS calendar URL and parses out VEVENT entries.
+/// Returns [{uid, title, date}] where date is YYYY-MM-DD.
+#[tauri::command]
+async fn fetch_and_parse_ics(url: String) -> Result<Vec<serde_json::Value>, String> {
+    // webcal:// → https://
+    let url = if url.starts_with("webcal://") {
+        url.replacen("webcal://", "https://", 1)
+    } else {
+        url
+    };
+
+    let text = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("Failed to fetch calendar: {}", e))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Unfold ICS lines (continuation lines start with SPACE or TAB)
+    let unfolded = text
+        .replace("\r\n ", "").replace("\r\n\t", "")
+        .replace("\n ", "").replace("\n\t", "");
+
+    let mut events: Vec<serde_json::Value> = Vec::new();
+    let mut in_event = false;
+    let mut uid = String::new();
+    let mut title = String::new();
+    let mut date = String::new();
+    let mut rrule = String::new();
+    let mut exdates: Vec<String> = Vec::new();
+    // Skip VEVENT overrides for specific recurrence instances (RECURRENCE-ID present)
+    let mut is_override = false;
+
+    for line in unfolded.lines() {
+        let line = line.trim_end_matches('\r');
+        if line == "BEGIN:VEVENT" {
+            in_event = true;
+            uid.clear(); title.clear(); date.clear(); rrule.clear(); exdates.clear();
+            is_override = false;
+        } else if line == "END:VEVENT" {
+            if in_event && !date.is_empty() && !title.is_empty() && !is_override {
+                events.push(serde_json::json!({
+                    "uid": uid,
+                    "title": title,
+                    "date": date,
+                    "rrule": rrule,
+                    "exdates": exdates,
+                }));
+            }
+            in_event = false;
+        } else if in_event {
+            if let Some(colon) = line.find(':') {
+                let prop = &line[..colon];
+                let val = &line[colon + 1..];
+                let prop_name = prop.split(';').next().unwrap_or(prop).to_uppercase();
+                match prop_name.as_str() {
+                    "UID" => uid = val.trim().to_string(),
+                    "SUMMARY" => {
+                        title = val
+                            .replace("\\n", " ").replace("\\N", " ")
+                            .replace("\\,", ",").replace("\\;", ";")
+                            .replace("\\\\", "\\");
+                    }
+                    "DTSTART" => {
+                        let v = val.trim();
+                        if v.len() >= 8 {
+                            let d = &v[..8];
+                            if d.chars().all(|c| c.is_ascii_digit()) {
+                                date = format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]);
+                            }
+                        }
+                    }
+                    "RRULE" => rrule = val.trim().to_string(),
+                    "RECURRENCE-ID" => is_override = true,
+                    "EXDATE" => {
+                        // May be comma-separated list of datetimes
+                        for part in val.split(',') {
+                            let p = part.trim();
+                            if p.len() >= 8 {
+                                let d = &p[..8];
+                                if d.chars().all(|c| c.is_ascii_digit()) {
+                                    exdates.push(format!("{}-{}-{}", &d[..4], &d[4..6], &d[6..8]));
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(events)
+}
+
+/// Downloads a URL to a local file path (used for arXiv PDF import).
+#[tauri::command]
+async fn download_file(url: String, dest_path: String) -> Result<(), String> {
+    let bytes = reqwest::get(&url)
+        .await
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&dest_path, &bytes).map_err(|e| e.to_string())
+}
+
+/// Fetches arXiv metadata (title, authors, abstract) for a given arXiv ID.
+#[tauri::command]
+async fn fetch_arxiv_metadata(arxiv_id: String) -> Result<serde_json::Value, String> {
+    let url = format!("https://export.arxiv.org/api/query?id_list={}", arxiv_id);
+    let xml = reqwest::get(&url)
+        .await
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    fn extract_tag(s: &str, tag: &str) -> Option<String> {
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        let start = s.find(&open)? + open.len();
+        let end = s[start..].find(&close)? + start;
+        Some(s[start..end].trim().to_string())
+    }
+
+    let title = extract_tag(&xml, "title")
+        .unwrap_or_default()
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let abstract_text = extract_tag(&xml, "summary")
+        .unwrap_or_default()
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    // Collect all <name> tags inside <author> blocks
+    let mut authors: Vec<String> = Vec::new();
+    let mut rest = xml.as_str();
+    while let Some(start) = rest.find("<name>") {
+        let start = start + "<name>".len();
+        if let Some(end) = rest[start..].find("</name>") {
+            authors.push(rest[start..start + end].trim().to_string());
+            rest = &rest[start + end + "</name>".len()..];
+        } else {
+            break;
+        }
+    }
+
+    // If no entry found (bad ID), title will be "Error" or empty
+    if title.is_empty() || title.to_lowercase().contains("error") {
+        return Err(format!("arXiv ID '{}' not found", arxiv_id));
+    }
+
+    Ok(serde_json::json!({
+        "title": title,
+        "authors": authors,
+        "abstract": abstract_text,
+        "pdf_url": format!("https://arxiv.org/pdf/{}", arxiv_id),
+    }))
 }
 
 /// Copies a file into the app's data dir under `files/<space_id>/`.
@@ -129,7 +311,7 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, list_daemon_folders, read_file_bytes])
+        .invoke_handler(tauri::generate_handler![local_ip, import_file, open_file, setup_space_folder, scan_space_folder, list_daemon_folders, read_file_bytes, write_text_file, delete_folder, download_file, fetch_arxiv_metadata, fetch_and_parse_ics])
         .setup(|app| {
             let db_path = app
                 .path()

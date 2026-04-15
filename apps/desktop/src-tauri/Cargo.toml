@@ -30,4 +30,5 @@ axum = "0.8"
 mdns-sd = "0.13"
 rusqlite = { version = "0.32", features = ["bundled"] }
 local-ip-address = "0.6"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 

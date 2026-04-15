@@ -4,7 +4,10 @@ import WhiteboardView from "./views/WhiteboardView";
 import SpacesView from "./views/SpacesView";
 import NoteView from "./views/NoteView";
 import PDFView from "./views/PDFView";
+import TextFileView from "./views/TextFileView";
+import CalendarView from "./views/CalendarView";
 import SearchModal from "./components/SearchModal";
+import ArxivImportModal from "./components/ArxivImportModal";
 import "./App.css";
 
 export type ActiveView =
@@ -12,6 +15,8 @@ export type ActiveView =
   | { type: "spaces"; spaceId: string; openAddNode?: boolean }
   | { type: "note"; noteId: string }
   | { type: "pdf"; nodeId: string; filePath: string }
+  | { type: "textfile"; filePath: string }
+  | { type: "calendar" }
   | null;
 
 export default function App() {
@@ -35,12 +40,22 @@ export default function App() {
     setRefreshKey(k => k + 1);
   }
 
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [arxivOpen, setArxivOpen] = useState(false);
+
   return (
     <div className="app-shell">
-      <Sidebar active={active} onActivate={setActive} onDataChange={handleDataChange} />
+      <Sidebar
+        active={active}
+        onActivate={setActive}
+        onDataChange={handleDataChange}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(c => !c)}
+        onArxivImport={() => setArxivOpen(true)}
+      />
       <main className="main-area">
         {active?.type === "whiteboard" && (
-          <WhiteboardView key={active.boardId} boardId={active.boardId} />
+          <WhiteboardView key={active.boardId} boardId={active.boardId} onNavigate={setActive} />
         )}
         {active?.type === "spaces" && (
           <SpacesView
@@ -54,10 +69,16 @@ export default function App() {
           />
         )}
         {active?.type === "note" && (
-          <NoteView key={active.noteId} noteId={active.noteId} />
+          <NoteView key={active.noteId} noteId={active.noteId} onNavigate={setActive} />
         )}
         {active?.type === "pdf" && (
-          <PDFView key={active.nodeId} nodeId={active.nodeId} filePath={active.filePath} />
+          <PDFView key={active.nodeId} nodeId={active.nodeId} filePath={active.filePath} onNavigate={setActive} />
+        )}
+        {active?.type === "textfile" && (
+          <TextFileView key={active.filePath} filePath={active.filePath} />
+        )}
+        {active?.type === "calendar" && (
+          <CalendarView />
         )}
         {!active && (
           <div className="placeholder-view">
@@ -71,6 +92,13 @@ export default function App() {
         <SearchModal
           onNavigate={view => { setActive(view); setSearchOpen(false); }}
           onClose={() => setSearchOpen(false)}
+        />
+      )}
+
+      {arxivOpen && (
+        <ArxivImportModal
+          onClose={() => setArxivOpen(false)}
+          onNavigate={view => { setActive(view); }}
         />
       )}
     </div>

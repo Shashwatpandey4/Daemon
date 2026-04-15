@@ -4,7 +4,8 @@ import { Excalidraw } from "@excalidraw/excalidraw";
 import { invoke } from "@tauri-apps/api/core";
 import Database from "@tauri-apps/plugin-sql";
 import WbNoteOverlay from "../components/WbNoteOverlay";
-import type { WbNote, WbNoteEdge, ScrollState } from "../components/WbNoteOverlay";
+import type { WbNote, WbNoteEdge, WbNoteRef, ScrollState } from "../components/WbNoteOverlay";
+import type { ActiveView } from "../App";
 import ContextMenu, { type CtxItem } from "../components/ContextMenu";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -48,6 +49,8 @@ function getDb() {
         content TEXT DEFAULT '', pos_x REAL DEFAULT 0, pos_y REAL DEFAULT 0,
         color TEXT DEFAULT '#fef08a', created_at INTEGER
       )`);
+      try { await database.execute("ALTER TABLE wb_notes ADD COLUMN width REAL"); } catch { /* exists */ }
+      try { await database.execute("ALTER TABLE wb_notes ADD COLUMN height REAL"); } catch { /* exists */ }
       await database.execute(`CREATE TABLE IF NOT EXISTS wb_note_edges (
         id TEXT PRIMARY KEY, whiteboard_id TEXT NOT NULL,
         source_id TEXT NOT NULL, target_id TEXT NOT NULL
@@ -56,6 +59,13 @@ function getDb() {
         id TEXT PRIMARY KEY, node_id TEXT NOT NULL,
         rects TEXT NOT NULL, color TEXT DEFAULT '#fef08a',
         selected_text TEXT DEFAULT '', created_at INTEGER
+      )`);
+      await database.execute(`CREATE TABLE IF NOT EXISTS wb_note_refs (
+        id TEXT PRIMARY KEY,
+        note_id TEXT NOT NULL,
+        ref_type TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        ref_text TEXT NOT NULL
       )`);
       return database;
     })();
@@ -66,19 +76,22 @@ function getDb() {
 interface Props {
   nodeId: string;
   filePath: string;
+  onNavigate?: (view: ActiveView) => void;
 }
 
 interface CtxState { x: number; y: number; items: CtxItem[] }
 
-export default function PDFView({ nodeId, filePath }: Props) {
+export default function PDFView({ nodeId, filePath, onNavigate }: Props) {
   const [numPages, setNumPages] = useState(0);
   const [pageHeights, setPageHeights] = useState<number[]>([]);
   const [scroll, setScroll] = useState<ScrollState>({ scrollX: 20, scrollY: 20, zoom: 1 });
   const [wbNotes, setWbNotes] = useState<WbNote[]>([]);
   const [wbEdges, setWbEdges] = useState<WbNoteEdge[]>([]);
+  const [wbRefs, setWbRefs] = useState<WbNoteRef[]>([]);
   const [highlights, setHighlights] = useState<PdfHighlight[]>([]);
   const [selToolbar, setSelToolbar] = useState<SelToolbar | null>(null);
   const [highlightMode, setHighlightMode] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
   const [ctx, setCtx] = useState<CtxState | null>(null);
   const [title, setTitle] = useState("");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
@@ -163,7 +176,7 @@ export default function PDFView({ nodeId, filePath }: Props) {
         "SELECT title, content FROM space_nodes WHERE id = ?", [nodeId]
       ),
       database.select<WbNote[]>(
-        "SELECT id, content, pos_x, pos_y, color FROM wb_notes WHERE whiteboard_id = ? ORDER BY created_at ASC",
+        "SELECT id, content, pos_x, pos_y, color, width, height FROM wb_notes WHERE whiteboard_id = ? ORDER BY created_at ASC",
         [nodeId]
       ),
       database.select<WbNoteEdge[]>(
@@ -200,6 +213,111 @@ export default function PDFView({ nodeId, filePath }: Props) {
     setWbNotes(notes);
     setWbEdges(edges);
     setHighlights(hlRows);
+    await loadRefs(database);
+  }
+
+  async function loadRefs(database?: Awaited<ReturnType<typeof getDb>>) {
+    try {
+      const db = database ?? await getDb();
+      const rows = await db.select<WbNoteRef[]>(
+        `SELECT r.note_id, r.ref_type, r.ref_id, r.ref_text
+         FROM wb_note_refs r
+         JOIN wb_notes n ON n.id = r.note_id AND n.whiteboard_id = ?`,
+        [nodeId]
+      );
+      setWbRefs(rows);
+    } catch { /* table may not exist yet */ }
+  }
+
+  function parseRefs(content: string): { todos: string[]; whiteboards: string[] } {
+    const todos: string[] = [];
+    const whiteboards: string[] = [];
+    for (const line of content.split("\n")) {
+      const t = line.trim();
+      const todoM = t.match(/^todo\s*:\s*(.+)/i);
+      if (todoM) { todos.push(todoM[1].trim()); continue; }
+      const wbM = t.match(/^wb\s*:\s*(.+)/i);
+      if (wbM) { whiteboards.push(wbM[1].trim()); }
+    }
+    return { todos, whiteboards };
+  }
+
+  async function syncNoteRefs(noteId: string, content: string) {
+    const database = await getDb();
+    // Ensure table exists — guards against stale module singleton in dev mode
+    await database.execute(`CREATE TABLE IF NOT EXISTS wb_note_refs (
+      id TEXT PRIMARY KEY, note_id TEXT NOT NULL,
+      ref_type TEXT NOT NULL, ref_id TEXT NOT NULL, ref_text TEXT NOT NULL
+    )`);
+    const { todos, whiteboards } = parseRefs(content);
+    const existingRefs = await database.select<WbNoteRef[]>(
+      "SELECT note_id, ref_type, ref_id, ref_text FROM wb_note_refs WHERE note_id = ?",
+      [noteId]
+    );
+
+    const existingTodos = existingRefs.filter(r => r.ref_type === "todo");
+    const newTodoTexts = new Set(todos);
+    const oldTodoTexts = new Set(existingTodos.map(r => r.ref_text));
+
+    let todoDeleted = false;
+    for (const ref of existingTodos) {
+      if (!newTodoTexts.has(ref.ref_text)) {
+        await database.execute("DELETE FROM todos WHERE id = ?", [ref.ref_id]);
+        await database.execute("DELETE FROM wb_note_refs WHERE note_id = ? AND ref_type = 'todo' AND ref_text = ?", [noteId, ref.ref_text]);
+        todoDeleted = true;
+      }
+    }
+    if (todoDeleted) window.dispatchEvent(new CustomEvent("daemon:todos-changed"));
+    for (const text of todos) {
+      if (!oldTodoTexts.has(text)) {
+        const todoId = crypto.randomUUID();
+        const now = Date.now();
+        await database.execute(
+          "INSERT INTO todos (id, title, completed, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+          [todoId, text, now, now]
+        );
+        const refId = crypto.randomUUID();
+        await database.execute(
+          "INSERT INTO wb_note_refs (id, note_id, ref_type, ref_id, ref_text) VALUES (?, ?, 'todo', ?, ?)",
+          [refId, noteId, todoId, text]
+        );
+        window.dispatchEvent(new CustomEvent("daemon:todos-changed"));
+      }
+    }
+
+    const existingWbs = existingRefs.filter(r => r.ref_type === "whiteboard");
+    const newWbNames = new Set(whiteboards);
+    const oldWbNames = new Set(existingWbs.map(r => r.ref_text));
+
+    for (const ref of existingWbs) {
+      if (!newWbNames.has(ref.ref_text)) {
+        await database.execute("DELETE FROM wb_note_refs WHERE note_id = ? AND ref_type = 'whiteboard' AND ref_text = ?", [noteId, ref.ref_text]);
+      }
+    }
+    for (const name of whiteboards) {
+      if (!oldWbNames.has(name)) {
+        const existing = await database.select<{ id: string }[]>(
+          "SELECT id FROM whiteboards WHERE name = ? LIMIT 1", [name]
+        );
+        let wbId: string;
+        if (existing.length > 0) {
+          wbId = existing[0].id;
+        } else {
+          wbId = crypto.randomUUID();
+          await database.execute(
+            "INSERT INTO whiteboards (id, name, created_at) VALUES (?, ?, ?)",
+            [wbId, name, Date.now()]
+          );
+        }
+        const refId = crypto.randomUUID();
+        await database.execute(
+          "INSERT INTO wb_note_refs (id, note_id, ref_type, ref_id, ref_text) VALUES (?, ?, 'whiteboard', ?, ?)",
+          [refId, noteId, wbId, name]
+        );
+      }
+    }
+
+    await loadRefs();
   }
 
   // Save Excalidraw annotation data to space_nodes.content
@@ -252,18 +370,45 @@ export default function PDFView({ nodeId, filePath }: Props) {
     moveTimersRef.current.set(id, timer);
   }, []);
 
+  const handleNoteResize = useCallback((id: string, w: number, h: number) => {
+    setWbNotes(prev => prev.map(n => n.id === id ? { ...n, width: w, height: h } : n));
+    const existing = moveTimersRef.current.get(id + "_resize");
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(async () => {
+      const database = await getDb();
+      await database.execute("UPDATE wb_notes SET width = ?, height = ? WHERE id = ?", [w, h, id]);
+      moveTimersRef.current.delete(id + "_resize");
+    }, 300);
+    moveTimersRef.current.set(id + "_resize", timer);
+  }, []);
+
   const handleNoteEdit = useCallback(async (id: string, content: string) => {
     setWbNotes(prev => prev.map(n => n.id === id ? { ...n, content } : n));
     const database = await getDb();
     await database.execute("UPDATE wb_notes SET content = ? WHERE id = ?", [content, id]);
-  }, []);
+    await syncNoteRefs(id, content);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeId]);
 
   const handleNoteDelete = useCallback(async (id: string) => {
-    setWbNotes(prev => prev.filter(n => n.id !== id));
-    setWbEdges(prev => prev.filter(e => e.source_id !== id && e.target_id !== id));
     const database = await getDb();
+    const refs = await database.select<WbNoteRef[]>(
+      "SELECT note_id, ref_type, ref_id, ref_text FROM wb_note_refs WHERE note_id = ?", [id]
+    );
+    let todosChanged = false;
+    for (const ref of refs) {
+      if (ref.ref_type === "todo") {
+        await database.execute("DELETE FROM todos WHERE id = ?", [ref.ref_id]);
+        todosChanged = true;
+      }
+    }
+    await database.execute("DELETE FROM wb_note_refs WHERE note_id = ?", [id]);
     await database.execute("DELETE FROM wb_notes WHERE id = ?", [id]);
     await database.execute("DELETE FROM wb_note_edges WHERE source_id = ? OR target_id = ?", [id, id]);
+    setWbNotes(prev => prev.filter(n => n.id !== id));
+    setWbEdges(prev => prev.filter(e => e.source_id !== id && e.target_id !== id));
+    setWbRefs(prev => prev.filter(r => r.note_id !== id));
+    if (todosChanged) window.dispatchEvent(new CustomEvent("daemon:todos-changed"));
   }, []);
 
   const handleNoteConnect = useCallback(async (srcId: string, tgtId: string) => {
@@ -300,7 +445,14 @@ export default function PDFView({ nodeId, filePath }: Props) {
     const text = sel.toString().trim();
     if (!text) { setSelToolbar(null); return; }
 
-    const clientRects = Array.from(range.getClientRects()).filter(r => r.width > 1 && r.height > 1);
+    const allRects = Array.from(range.getClientRects()).filter(r => r.width > 1 && r.height > 1);
+    if (allRects.length === 0) { setSelToolbar(null); return; }
+
+    // PDF text layers sometimes return a large bounding-box rect for the whole text block
+    // in addition to tight per-line rects. Drop any rect that's > 2.5x taller than the
+    // smallest rect — those are container bounds, not actual text lines.
+    const minH = Math.min(...allRects.map(r => r.height));
+    const clientRects = allRects.filter(r => r.height <= minH * 2.5);
     if (clientRects.length === 0) { setSelToolbar(null); return; }
 
     // scrollX/scrollY are relative to the canvas area container, not the viewport
@@ -401,17 +553,29 @@ export default function PDFView({ nodeId, filePath }: Props) {
     <div className="pdf-view">
 
       {/* ── Left: PDF nav panel ── */}
-      <div className="pdf-nav-panel">
+      <div className={`pdf-nav-panel${navCollapsed ? " pdf-nav-collapsed" : ""}`}>
         <div className="pdf-nav-header">
-          <span className="pdf-nav-title" title={title}>{title}</span>
-          <button
-            className={`pdf-mode-btn ${highlightMode ? "active" : ""}`}
-            title={highlightMode ? "Switch to draw mode" : "Switch to highlight mode"}
-            onClick={() => { setHighlightMode(m => !m); setSelToolbar(null); window.getSelection()?.removeAllRanges(); }}
-          >
-            {highlightMode ? "✏ Draw" : "🖊 Highlight"}
-          </button>
+          {!navCollapsed && <span className="pdf-nav-title" title={title}>{title}</span>}
+          <div className="pdf-nav-header-actions">
+            {!navCollapsed && (
+              <button
+                className={`pdf-mode-btn ${highlightMode ? "active" : ""}`}
+                title={highlightMode ? "Switch to draw mode" : "Switch to highlight mode"}
+                onClick={() => { setHighlightMode(m => !m); setSelToolbar(null); window.getSelection()?.removeAllRanges(); }}
+              >
+                {highlightMode ? "✏" : "🖊"}
+              </button>
+            )}
+            <button
+              className="pdf-nav-collapse-btn"
+              onClick={() => setNavCollapsed(c => !c)}
+              title={navCollapsed ? "Expand panel" : "Collapse panel"}
+            >
+              {navCollapsed ? "›" : "‹"}
+            </button>
+          </div>
         </div>
+        {!navCollapsed && <>
         <div className="pdf-nav-thumbs">
           {!pdfUrl && <p className="pdf-nav-loading">Loading…</p>}
           {pdfUrl && <Document file={pdfUrl}>
@@ -432,6 +596,7 @@ export default function PDFView({ nodeId, filePath }: Props) {
             ))}
           </Document>}
         </div>
+        </>}
       </div>
 
       {/* ── Right: canvas ── */}
@@ -455,57 +620,52 @@ export default function PDFView({ nodeId, filePath }: Props) {
             loading={null}
             error={<div className="pdf-load-error">Failed to load PDF</div>}
           >
-            {Array.from({ length: numPages }, (_, i) => (
-              <div key={i} style={{ marginBottom: PAGE_GAP * renderZoom, position: "relative" }}>
-                <Page
-                  pageNumber={i + 1}
-                  width={PAGE_WIDTH * renderZoom}
-                  renderTextLayer={true}
-                  renderAnnotationLayer={false}
-                  onLoadSuccess={page => {
-                    const h = Math.round(PAGE_WIDTH * (page.originalHeight / page.originalWidth));
-                    setPageHeights(prev => {
-                      const next = [...prev];
-                      next[i] = h;
-                      return next;
-                    });
-                  }}
-                />
-              </div>
-            ))}
-          </Document>}
-
-          {/* Highlight rects — absolutely positioned in render-space coords */}
-          <div style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}>
-            {highlights.map(h => {
-              const rects: HRect[] = JSON.parse(h.rects);
-              return rects.map((r, i) => (
-                <div
-                  key={`${h.id}-${i}`}
-                  style={{
-                    position: "absolute",
-                    left: r.x * renderZoom,
-                    top: r.y * renderZoom,
-                    width: r.width * renderZoom,
-                    height: r.height * renderZoom,
-                    background: h.color,
-                    opacity: 0.45,
-                    mixBlendMode: "multiply",
-                    pointerEvents: "auto",
-                    cursor: "default",
-                  }}
-                  onContextMenu={e => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setCtx({
-                      x: e.clientX, y: e.clientY,
-                      items: [{ label: "Delete highlight", onClick: () => deleteHighlight(h.id) }],
-                    });
-                  }}
-                />
-              ));
+            {Array.from({ length: numPages }, (_, i) => {
+              const pageY = pageYPositions[i] ?? 0;
+              const pageH = pageHeights[i] ?? 0;
+              // Highlight rects that fall on this page, re-zeroed to page-local coords
+              const pageRects = highlights.flatMap(h => {
+                const rects: HRect[] = JSON.parse(h.rects);
+                return rects
+                  .filter(r => r.y + r.height > pageY && r.y < pageY + pageH)
+                  .map(r => ({ ...r, hlId: h.id, color: h.color }));
+              });
+              return (
+                <div key={i} style={{ marginBottom: PAGE_GAP * renderZoom, position: "relative" }}>
+                  <Page
+                    pageNumber={i + 1}
+                    width={PAGE_WIDTH * renderZoom}
+                    renderTextLayer={true}
+                    renderAnnotationLayer={false}
+                    onLoadSuccess={page => {
+                      const h = Math.round(PAGE_WIDTH * (page.originalHeight / page.originalWidth));
+                      setPageHeights(prev => {
+                        const next = [...prev];
+                        next[i] = h;
+                        return next;
+                      });
+                    }}
+                  />
+                  {/* Highlights inside the page div — same stacking context as the PDF canvas */}
+                  {pageRects.map((r, ri) => (
+                    <div
+                      key={`${r.hlId}-${i}-${ri}`}
+                      style={{
+                        position: "absolute",
+                        left: r.x * renderZoom,
+                        top: (r.y - pageY) * renderZoom,
+                        width: r.width * renderZoom,
+                        height: r.height * renderZoom,
+                        background: r.color,
+                        opacity: 0.2,
+                        pointerEvents: "none",
+                      }}
+                    />
+                  ))}
+                </div>
+              );
             })}
-          </div>
+          </Document>}
         </div>
 
         {/* Excalidraw + sticky note overlay */}
@@ -535,11 +695,14 @@ export default function PDFView({ nodeId, filePath }: Props) {
             notes={wbNotes}
             edges={wbEdges}
             scroll={scroll}
+            refs={wbRefs}
             onMove={handleNoteMove}
+            onResize={handleNoteResize}
             onEdit={handleNoteEdit}
             onDelete={handleNoteDelete}
             onConnect={handleNoteConnect}
             onEdgeDelete={handleEdgeDelete}
+            onNavigate={onNavigate}
           />
         </div>
 
