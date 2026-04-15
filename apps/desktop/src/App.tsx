@@ -7,6 +7,7 @@ import PDFView from "./views/PDFView";
 import TextFileView from "./views/TextFileView";
 import CalendarView from "./views/CalendarView";
 import GlobalGraphView from "./views/GlobalGraphView";
+import TableView from "./views/TableView";
 import SearchModal from "./components/SearchModal";
 import ArxivImportModal from "./components/ArxivImportModal";
 import "./App.css";
@@ -19,6 +20,7 @@ export type ActiveView =
   | { type: "textfile"; filePath: string }
   | { type: "calendar" }
   | { type: "global-graph" }
+  | { type: "table"; tableId: string }
   | null;
 
 export default function App() {
@@ -84,6 +86,9 @@ export default function App() {
         )}
         {active?.type === "global-graph" && (
           <GlobalGraphView onNavigate={setActive} />
+        )}
+        {active?.type === "table" && (
+          <TableView key={active.tableId} tableId={active.tableId} />
         )}
         {!active && (
           <div className="placeholder-view">

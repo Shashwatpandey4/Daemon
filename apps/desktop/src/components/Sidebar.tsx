@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Database from "@tauri-apps/plugin-sql";
 import {
-  CheckSquare, Pencil, Boxes, CalendarDays, Network,
+  CheckSquare, Pencil, Boxes, CalendarDays, Network, Table2,
   ChevronRight, ChevronDown, Plus, Download, FilePlus, FolderPlus, Folder,
   Globe, FileText, Image, File, FileCode, StickyNote, NotebookPen,
 } from "lucide-react";
@@ -13,6 +13,7 @@ import type { ActiveView } from "../App";
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Todo { id: string; title: string; completed: boolean; }
+interface TableMeta { id: string; name: string; created_at: number; }
 interface Board { id: string; name: string; created_at: number; }
 interface Space { id: string; name: string; folder_path: string | null; created_at: number; }
 interface SpaceNode {
@@ -21,7 +22,7 @@ interface SpaceNode {
   url: string | null; file_path: string | null;
 }
 
-type Panel = "todo" | "whiteboards" | "spaces";
+type Panel = "todo" | "whiteboards" | "spaces" | "tables";
 
 // ── DB setup ───────────────────────────────────────────────────────────────
 
@@ -97,6 +98,39 @@ async function getDb() {
         created_at INTEGER NOT NULL
       )
     `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS db_tables (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS table_columns (
+        id TEXT PRIMARY KEY,
+        table_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        col_type TEXT NOT NULL DEFAULT 'text',
+        options TEXT NOT NULL DEFAULT '[]',
+        position INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS table_rows (
+        id TEXT PRIMARY KEY,
+        table_id TEXT NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS table_cells (
+        row_id TEXT NOT NULL,
+        col_id TEXT NOT NULL,
+        value TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (row_id, col_id)
+      )
+    `);
   }
   return db;
 }
@@ -142,12 +176,18 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
   const spaceInputRef = useRef<HTMLInputElement>(null);
   const inlineAddRef = useRef<HTMLInputElement>(null);
 
+  // Tables
+  const [tables, setTables] = useState<TableMeta[]>([]);
+  const [addingTable, setAddingTable] = useState(false);
+  const tableInputRef = useRef<HTMLInputElement>(null);
+
   const resizerRef = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => { if (addingTodo)  todoInputRef.current?.focus();  }, [addingTodo]);
   useEffect(() => { if (addingBoard) boardInputRef.current?.focus(); }, [addingBoard]);
   useEffect(() => { if (addingSpace) spaceInputRef.current?.focus(); }, [addingSpace]);
   useEffect(() => { if (inlineAdd)   inlineAddRef.current?.focus();  }, [inlineAdd]);
+  useEffect(() => { if (addingTable) tableInputRef.current?.focus(); }, [addingTable]);
 
   // ── Loaders ──────────────────────────────────────────────────────────────
 
@@ -211,7 +251,7 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
     setSpaceNodes(prev => ({ ...prev, [spaceId]: rows }));
   }
 
-  useEffect(() => { loadTodos(); loadBoards(); loadSpaces(); }, []);
+  useEffect(() => { loadTodos(); loadBoards(); loadSpaces(); loadTables(); }, []);
 
   // Refresh todos when a sticky note creates one externally
   useEffect(() => {
@@ -349,6 +389,40 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
     return <File size={12} />;
   }
 
+  // ── Table ops ─────────────────────────────────────────────────────────────
+
+  async function loadTables() {
+    const db = await getDb();
+    setTables(await db.select<TableMeta[]>(
+      "SELECT id, name, created_at FROM db_tables ORDER BY created_at ASC"
+    ));
+  }
+
+  async function createTable(name: string) {
+    setAddingTable(false);
+    const n = name.trim() || `Table ${tables.length + 1}`;
+    const db = await getDb();
+    const id = crypto.randomUUID();
+    await db.execute("INSERT INTO db_tables (id, name, created_at) VALUES (?, ?, ?)", [id, n, Date.now()]);
+    await db.execute(
+      "INSERT INTO table_columns (id, table_id, name, col_type, options, position) VALUES (?, ?, ?, ?, ?, ?)",
+      [crypto.randomUUID(), id, "Name", "text", "[]", 0]
+    );
+    await loadTables();
+    onActivate({ type: "table", tableId: id });
+  }
+
+  async function deleteTable(id: string) {
+    const db = await getDb();
+    const rows = await db.select<{ id: string }[]>("SELECT id FROM table_rows WHERE table_id = ?", [id]);
+    for (const r of rows) await db.execute("DELETE FROM table_cells WHERE row_id = ?", [r.id]);
+    await db.execute("DELETE FROM table_rows WHERE table_id = ?", [id]);
+    await db.execute("DELETE FROM table_columns WHERE table_id = ?", [id]);
+    await db.execute("DELETE FROM db_tables WHERE id = ?", [id]);
+    await loadTables();
+    if (active?.type === "table" && active.tableId === id) onActivate(null);
+  }
+
   // ── Context menus ─────────────────────────────────────────────────────────
 
   function ctxTodoPanel(e: React.MouseEvent) {
@@ -451,6 +525,19 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
     ]});
   }
 
+  function ctxTablePanel(e: React.MouseEvent) {
+    e.preventDefault(); e.stopPropagation();
+    setCtx({ x: e.clientX, y: e.clientY, items: [
+      { label: "New Table", onClick: () => setAddingTable(true) },
+    ]});
+  }
+  function ctxTableItem(e: React.MouseEvent, t: TableMeta) {
+    e.preventDefault(); e.stopPropagation();
+    setCtx({ x: e.clientX, y: e.clientY, items: [
+      { label: "Delete Table", onClick: () => deleteTable(t.id), danger: true },
+    ]});
+  }
+
   // ── Resize ────────────────────────────────────────────────────────────────
 
   function onResizerDown(e: React.MouseEvent) {
@@ -513,6 +600,14 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
         >
           <Network size={22} />
         </button>
+
+        <button
+          className={`ab-btn${activePanel === "tables" ? " active" : ""}`}
+          title="Tables"
+          onClick={() => setActivePanel(p => p === "tables" ? null : "tables")}
+        >
+          <Table2 size={22} />
+        </button>
       </div>
 
       {/* ── Explorer panel ── */}
@@ -523,6 +618,7 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
               {activePanel === "todo" && "TODO"}
               {activePanel === "whiteboards" && "WHITEBOARDS"}
               {activePanel === "spaces" && "SPACES"}
+              {activePanel === "tables" && "TABLES"}
             </span>
             <div className="explorer-hdr-actions">
               {activePanel === "todo" && (
@@ -532,6 +628,11 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
               )}
               {activePanel === "whiteboards" && (
                 <button className="explorer-hdr-btn" title="New Board" onClick={() => setAddingBoard(true)}>
+                  <Plus size={14} />
+                </button>
+              )}
+              {activePanel === "tables" && (
+                <button className="explorer-hdr-btn" title="New Table" onClick={() => setAddingTable(true)}>
                   <Plus size={14} />
                 </button>
               )}
@@ -710,6 +811,29 @@ export default function Sidebar({ active, onActivate, onDataChange, collapsed, o
               </div>
             )}
 
+            {/* ── Tables panel ── */}
+            {activePanel === "tables" && (
+              <div className="explorer-content" onContextMenu={ctxTablePanel}>
+                {tables.map(t => (
+                  <div key={t.id}
+                    className={`sb-item${active?.type === "table" && active.tableId === t.id ? " active" : ""}`}
+                    onClick={() => onActivate({ type: "table", tableId: t.id })}
+                    onContextMenu={e => ctxTableItem(e, t)}
+                  >
+                    <Table2 size={13} style={{ marginRight: 6, flexShrink: 0, color: "var(--text-3)" }} />
+                    <span className="sb-item-label">{t.name}</span>
+                  </div>
+                ))}
+                {addingTable && (
+                  <div className="sb-inline-add">
+                    <input ref={tableInputRef} className="sb-add-input" placeholder="Table name…"
+                      onKeyDown={e => { e.stopPropagation(); if (e.key === "Enter") createTable(e.currentTarget.value); if (e.key === "Escape") setAddingTable(false); }}
+                      onBlur={e => createTable(e.target.value)} />
+                  </div>
+                )}
+                {tables.length === 0 && !addingTable && <p className="sb-empty">Right-click to add a table</p>}
+              </div>
+            )}
 
           </div>
           <div className="sb-resizer" onMouseDown={onResizerDown} />
